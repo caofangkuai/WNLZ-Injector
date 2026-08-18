@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">无能乐子注入器</string>
+    <string name="hint_package_name">输入或长按选择包名</string>
+    <string name="label_injection_method">注入方式</string>
+    <string name="hint_select_method">点击选择注入方式</string>
+    <string name="btn_inject">注入</string>
+    <string name="dialog_app_list_title">选择应用</string>
+    <string name="dialog_method_list_title">选择注入方式</string>
+    <string name="dialog_unsupported_title">设备不支持</string>
+    <string name="dialog_unsupported_msg">当前设备不支持此注入方式，是否仍要选择？</string>
+    <string name="action_confirm">确定</string>
+    <string name="action_cancel">取消</string>
+    <string name="toast_no_package">请先输入包名</string>
+    <string name="toast_no_method">请先选择注入方式</string>
+    <string name="toast_injecting">正在注入…（占位逻辑）</string>
+    <string name="method_start_anywhere">StartAnyWhere</string>
+    <string name="method_start_anywhere_desc">利用 PendingIntent 重定向实现任意起点启动</string>
+    <string name="supported">已支持</string>
+    <string name="not_supported">不支持</string>
+</resources>

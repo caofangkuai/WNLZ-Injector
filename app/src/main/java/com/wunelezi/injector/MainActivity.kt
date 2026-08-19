@@ -723,7 +723,7 @@ class MainActivity : AppCompatActivity() {
                     // 创建 PendingIntent
                     val pendingIntent = android.app.PendingIntent.getActivity(
                         this, 0, intent2,
-                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
                     )
 
                     // intent1: 指向目标包的 AssistActivity
@@ -734,7 +734,7 @@ class MainActivity : AppCompatActivity() {
                     val extraIntent = Intent()
                     extraIntent.putExtra("key_request_code", 0x2782)
                     extraIntent.putExtra("appid", "1106798370")
-                    extraIntent.putExtra("for_result", true)
+                    extraIntent.putExtra("for_result", false)
                     extraIntent.setData(Uri.parse("https://openmobile.qq.com/share?share_id=poc_001"))
 
                     intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", extraIntent)

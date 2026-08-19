@@ -89,7 +89,7 @@
                         android:singleLine="true"
                         android:textSize="15sp"
                         android:longClickable="true"
-                        tools:text="com.example.app" />
+                        android:text="com.netease.x19" />
 
                 </com.google.android.material.textfield.TextInputLayout>
 

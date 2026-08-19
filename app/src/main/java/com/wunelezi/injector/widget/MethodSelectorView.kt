@@ -46,7 +46,8 @@ class MethodSelectorView @JvmOverloads constructor(
         tvStatus = findViewById(R.id.tvStatus)
         ivArrow = findViewById(R.id.ivArrow)
 
-        setOnClickListener { showMethodDialog() }
+        // 点击事件设置在卡片视图上（卡片 clickable=true 会拦截父级点击）
+        findViewById<LinearLayout>(R.id.cardMethod).setOnClickListener { showMethodDialog() }
     }
 
     /**

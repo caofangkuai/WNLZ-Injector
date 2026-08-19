@@ -30,6 +30,9 @@
     <string name="toast_delete_failed">删除失败</string>
     <string name="toast_read_failed">读取插件列表失败</string>
     <string name="action_revoke_permissions">释放所有权限</string>
+    <string name="action_custom_uri">自定义Content URI头</string>
+    <string name="dialog_custom_uri_title">设置 Content URI 头</string>
+    <string name="dialog_custom_uri_hint">如: content://com.netease.x19.fileprovider/name/</string>
     <string name="toast_permissions_revoked">已释放所有权限</string>
     <string name="toast_permissions_revoke_failed">释放失败</string>
     <string name="dialog_import_failed_title">导入失败 - 详细信息</string>

@@ -2,11 +2,14 @@
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical">
 
+    <!-- 顶部标题栏 -->
     <LinearLayout
+        android:id="@+id/headerBar"
         android:layout_width="match_parent"
         android:layout_height="56dp"
         android:orientation="horizontal"
@@ -16,6 +19,7 @@
         android:elevation="2dp">
 
         <TextView
+            android:id="@+id/tvDialogTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -76,6 +80,42 @@
         android:layout_height="0.5dp"
         android:background="@color/stroke" />
 
+    <!-- 选择模式下的删除按钮栏 -->
+    <LinearLayout
+        android:id="@+id/selectionBar"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="20dp"
+        android:background="@color/surface"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvSelectionCount"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="14sp"
+            android:textColor="@color/text_secondary"
+            tools:ignore="HardcodedText"
+            android:text="已选择 0 项" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDelete"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="@string/btn_delete"
+            android:textColor="@color/white"
+            app:backgroundTint="@color/error_red"
+            app:cornerRadius="10dp"
+            app:icon="@android:drawable/ic_menu_delete"
+            app:iconTint="@color/white"
+            app:iconGravity="textStart" />
+
+    </LinearLayout>
+
+    <!-- 导入按钮 -->
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnImport"
         android:layout_width="match_parent"

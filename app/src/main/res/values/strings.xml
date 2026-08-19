@@ -38,4 +38,5 @@
     <string name="dialog_import_success_title">导入成功 - 详细信息</string>
     <string name="dialog_load_empty_title">模块列表为空 - 加载详情</string>
     <string name="action_refresh">刷新</string>
+    <string name="btn_delete">删除</string>
 </resources>

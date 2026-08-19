@@ -9,12 +9,12 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.wunelezi.injector.adapter.AppAdapter
@@ -207,42 +207,62 @@ class MainActivity : AppCompatActivity() {
         }
 
         moduleAdapter = ModuleAdapter(moduleList)
+
+        // 长按进入选择模式时，显示删除按钮栏
+        moduleAdapter!!.onSelectionStarted = {
+            dialogBinding.selectionBar.visibility = View.VISIBLE
+        }
+
+        // 选择项变化时更新计数
+        moduleAdapter!!.onSelectionChanged = { count ->
+            dialogBinding.tvSelectionCount.text = "已选择 $count 项"
+        }
+
         dialogBinding.rvModuleList.layoutManager = LinearLayoutManager(this)
         dialogBinding.rvModuleList.adapter = moduleAdapter
 
-        // 右滑删除
-        val touchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
-            0, ItemTouchHelper.RIGHT
-        ) {
-            override fun onMove(
-                rv: RecyclerView,
-                vh: RecyclerView.ViewHolder,
-                target: RecyclerView.ViewHolder
-            ): Boolean = false
+        // 删除按钮
+        dialogBinding.btnDelete.setOnClickListener {
+            val selected = moduleAdapter?.getSelectedModules().orEmpty()
+            if (selected.isEmpty()) {
+                Toast.makeText(this, R.string.toast_delete_failed, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
-            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
-                val pos = viewHolder.bindingAdapterPosition
-                if (pos < 0 || pos >= moduleList.size) return
-                val module = moduleList[pos]
-                lifecycleScope.launch(Dispatchers.IO) {
-                    val ok = PluginManager.deletePlugin(this@MainActivity, packageName, module.zipName)
-                    withContext(Dispatchers.Main) {
-                        if (ok) {
-                            moduleList.removeAt(pos)
-                            moduleAdapter?.notifyItemRemoved(pos)
-                            Toast.makeText(this@MainActivity, R.string.toast_delete_success, Toast.LENGTH_SHORT).show()
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.btn_delete)
+                .setMessage("确认删除 ${selected.size} 个模块？")
+                .setPositiveButton(R.string.action_confirm) { _, _ ->
+                    val toDelete = selected.map { it.zipName }.toSet()
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        var allOk = true
+                        for (zipName in toDelete) {
+                            val ok = PluginManager.deletePlugin(this@MainActivity, packageName, zipName)
+                            if (!ok) allOk = false
+                        }
+                        withContext(Dispatchers.Main) {
+                            moduleAdapter?.removeModules(toDelete)
+                            moduleAdapter?.exitSelectionMode()
+                            dialogBinding.selectionBar.visibility = View.GONE
                             updateModuleSummary()
-                        } else {
-                            moduleAdapter?.notifyItemChanged(pos)
-                            Toast.makeText(this@MainActivity, R.string.toast_delete_failed, Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                this@MainActivity,
+                                if (allOk) R.string.toast_delete_success else R.string.toast_delete_failed,
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     }
                 }
-            }
-        })
-        touchHelper.attachToRecyclerView(dialogBinding.rvModuleList)
+                .setNegativeButton(R.string.action_cancel, null)
+                .show()
+        }
 
-        dialogBinding.btnModuleClose.setOnClickListener { moduleDialog?.dismiss() }
+        dialogBinding.btnModuleClose.setOnClickListener {
+            // 如果在选择模式，先退出选择模式
+            moduleAdapter?.exitSelectionMode()
+            dialogBinding.selectionBar.visibility = View.GONE
+            moduleDialog?.dismiss()
+        }
 
         // 导入按钮
         dialogBinding.btnImport.setOnClickListener {
@@ -257,17 +277,16 @@ class MainActivity : AppCompatActivity() {
         moduleDialog!!.show()
 
         // 加载模块
-        dialogBinding.progressBar.visibility = android.view.View.VISIBLE
+        dialogBinding.progressBar.visibility = View.VISIBLE
         lifecycleScope.launch(Dispatchers.IO) {
             val loadResult = PluginManager.loadModulesWithLogs(this@MainActivity, packageName)
             withContext(Dispatchers.Main) {
-                dialogBinding.progressBar.visibility = android.view.View.GONE
+                dialogBinding.progressBar.visibility = View.GONE
                 moduleList.clear()
                 moduleList.addAll(loadResult.modules)
                 moduleAdapter?.notifyDataSetChanged()
                 if (loadResult.modules.isEmpty()) {
-                    dialogBinding.tvEmpty.visibility = android.view.View.VISIBLE
-                    // 列表为空时展示加载详情
+                    dialogBinding.tvEmpty.visibility = View.VISIBLE
                     showLoadErrorDialog(loadResult)
                 }
             }

@@ -2,6 +2,7 @@
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
@@ -9,6 +10,15 @@
     android:paddingHorizontal="20dp"
     android:paddingVertical="14dp"
     android:background="@color/surface">
+
+    <CheckBox
+        android:id="@+id/cbSelect"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="12dp"
+        android:visibility="gone"
+        android:clickable="false"
+        android:focusable="false" />
 
     <LinearLayout
         android:layout_width="0dp"
@@ -53,12 +63,5 @@
             android:text="xxx.zip" />
 
     </LinearLayout>
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="右滑删除"
-        android:textSize="12sp"
-        android:textColor="@color/text_hint" />
 
 </LinearLayout>

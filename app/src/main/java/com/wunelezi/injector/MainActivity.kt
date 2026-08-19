@@ -604,7 +604,7 @@ class MainActivity : AppCompatActivity() {
 
                     // 构造 extraIntent（携带请求码、appid、for_result、data）
                     val extraIntent = Intent()
-                    extraIntent.putExtra("key_request_code", 0x1000)
+                    extraIntent.putExtra("key_request_code", 0x2782)
                     extraIntent.putExtra("appid", "1106798370")
                     extraIntent.putExtra("for_result", true)
                     extraIntent.setData(Uri.parse("https://openmobile.qq.com/share?share_id=poc_001"))

@@ -5,7 +5,10 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
@@ -14,6 +17,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -51,6 +55,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 标准存储权限请求 launcher (Android 10 及以下) */
+    private val storagePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val allGranted = results.values.all { it }
+        if (allGranted) {
+            Toast.makeText(this, R.string.toast_storage_granted, Toast.LENGTH_SHORT).show()
+            checkAndRequestAllFilesAccess()
+        } else {
+            Toast.makeText(this, R.string.toast_storage_denied, Toast.LENGTH_SHORT).show()
+            checkAndRequestAllFilesAccess()
+        }
+    }
+
+    /** 所有文件访问权限返回结果 */
+    private val allFilesAccessLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (Environment.isExternalStorageManager()) {
+                Toast.makeText(this, R.string.toast_all_files_granted, Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, R.string.toast_all_files_denied, Toast.LENGTH_SHORT).show()
+            }
+        }
+        // 无论结果如何, 继续检查 Shizuku
+        checkAndRequestShizukuPermission()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -73,6 +106,97 @@ class MainActivity : AppCompatActivity() {
 
         // 初始更新模块摘要
         updateModuleSummary()
+
+        // 自动申请所有文件管理权限
+        autoRequestAllPermissions()
+    }
+
+    // ==================== 权限自动申请 ====================
+
+    /**
+     * 自动申请所有权限的入口
+     *
+     * 顺序：标准存储权限 → 所有文件访问权限 → Shizuku 权限
+     */
+    private fun autoRequestAllPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+：先检查是否有 MANAGE_EXTERNAL_STORAGE
+            if (!Environment.isExternalStorageManager()) {
+                checkAndRequestAllFilesAccess()
+            } else {
+                // 已有所有文件访问权限, 检查 Shizuku
+                checkAndRequestShizukuPermission()
+            }
+        } else {
+            // Android 10 及以下：申请标准存储权限
+            val permissions = mutableListOf<String>()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val readGranted = ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.READ_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+                val writeGranted = ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!readGranted) permissions.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                if (!writeGranted && Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                    permissions.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                }
+            }
+            if (permissions.isNotEmpty()) {
+                storagePermissionLauncher.launch(permissions.toTypedArray())
+            } else {
+                checkAndRequestShizukuPermission()
+            }
+        }
+    }
+
+    /**
+     * 申请"所有文件访问权限" (MANAGE_EXTERNAL_STORAGE, Android 11+)
+     */
+    private fun checkAndRequestAllFilesAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    intent.data = Uri.parse("package:$packageName")
+                    allFilesAccessLauncher.launch(intent)
+                } catch (e: Exception) {
+                    // 某些设备不支持直接跳转, 尝试通用页面
+                    try {
+                        val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        allFilesAccessLauncher.launch(intent)
+                    } catch (e2: Exception) {
+                        Toast.makeText(this, R.string.toast_all_files_unsupported, Toast.LENGTH_LONG).show()
+                        checkAndRequestShizukuPermission()
+                    }
+                }
+            } else {
+                checkAndRequestShizukuPermission()
+            }
+        }
+    }
+
+    /**
+     * 检查并申请 Shizuku 权限
+     */
+    private fun checkAndRequestShizukuPermission() {
+        if (!ShizukuHelper.isAvailable()) {
+            // Shizuku 未运行, 提示但不阻塞
+            return
+        }
+        if (!ShizukuHelper.hasPermission()) {
+            val listener = object : Shizuku.OnRequestPermissionResultListener {
+                override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
+                    if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                        Toast.makeText(this@MainActivity, R.string.toast_shizuku_granted, Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this@MainActivity, R.string.toast_shizuku_denied, Toast.LENGTH_SHORT).show()
+                    }
+                    ShizukuHelper.removeListener(this)
+                }
+            }
+            ShizukuHelper.requestPermission(listener)
+        }
     }
 
     override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {

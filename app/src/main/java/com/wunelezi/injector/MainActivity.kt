@@ -1,8 +1,10 @@
 package com.wunelezi.injector
 
 import android.app.Dialog
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
@@ -17,6 +19,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.cfks.startanywhere.StartAnyWhere
 import com.wunelezi.injector.adapter.AppAdapter
 import com.wunelezi.injector.adapter.ModuleAdapter
 import com.wunelezi.injector.databinding.ActivityMainBinding
@@ -24,6 +27,7 @@ import com.wunelezi.injector.databinding.DialogAppListBinding
 import com.wunelezi.injector.databinding.DialogModuleListBinding
 import com.wunelezi.injector.model.AppInfo
 import com.wunelezi.injector.model.ImportResult
+import com.wunelezi.injector.model.InjectionMethod
 import com.wunelezi.injector.model.LoadResult
 import com.wunelezi.injector.model.ModuleInfo
 import com.wunelezi.injector.util.PluginManager
@@ -39,6 +43,12 @@ class MainActivity : AppCompatActivity() {
     private var moduleList: MutableList<ModuleInfo> = mutableListOf()
     private var moduleAdapter: ModuleAdapter? = null
     private var moduleDialog: Dialog? = null
+
+    /** StartAnyWhere 回调标志 */
+    private val STARTANYWHERE_CALLBACK = "wnlz_startanywhere_callback"
+
+    /** 加载对话框 */
+    private var loadingDialog: Dialog? = null
 
     /** SAF 文件选择 launcher */
     private val openFileLauncher = registerForActivityResult(
@@ -74,6 +84,28 @@ class MainActivity : AppCompatActivity() {
 
         // 启动时自动加载模块数量（静默，不报错）
         loadModuleSummary()
+
+        // 检查是否从 StartAnyWhere 回调返回
+        checkStartAnyWhereCallback(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        checkStartAnyWhereCallback(intent)
+    }
+
+    /**
+     * 检查是否从 StartAnyWhere 回调返回
+     *
+     * 如果 intent 包含特殊标志符，说明 URI 权限已获取，显示 toast 提示用户再次点击注入
+     */
+    private fun checkStartAnyWhereCallback(intent: Intent?) {
+        if (intent?.getStringExtra(STARTANYWHERE_CALLBACK) == "true") {
+            Toast.makeText(this, "权限已获取，请再次点击注入按钮", Toast.LENGTH_LONG).show()
+            // 清除标志，避免旋转屏幕重复触发
+            intent.removeExtra(STARTANYWHERE_CALLBACK)
+        }
     }
 
     override fun onResume() {
@@ -454,7 +486,139 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 占位逻辑 —— 仅提示
-        Toast.makeText(this, R.string.toast_injecting, Toast.LENGTH_SHORT).show()
+        val method = binding.methodSelector.getSelectedMethod()
+        if (method == null) {
+            Toast.makeText(this, R.string.toast_no_method, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (method == InjectionMethod.START_ANYWHERE) {
+            startStartAnyWhereInjection(packageName)
+        } else {
+            Toast.makeText(this, R.string.toast_injecting, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * StartAnyWhere 注入流程
+     *
+     * 1. 新线程执行，显示加载 dialog
+     * 2. 构造目标 dex 的 content URI
+     * 3. 尝试读取 URI 判断是否有权限
+     * 4. 无权限：通过 StartAnyWhere 启动 AssistActivity 授权
+     * 5. 有权限：toast "准备注入"
+     */
+    private fun startStartAnyWhereInjection(targetPackage: String) {
+        // 显示加载 dialog
+        showLoadingDialog()
+
+        Thread {
+            try {
+                // 获取目标包名版本信息
+                val pm = packageManager
+                val packageInfo = pm.getPackageInfo(targetPackage, 0)
+                val versionName = packageInfo.versionName ?: "unknown"
+                val versionCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    packageInfo.longVersionCode.toString()
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageInfo.versionCode.toString()
+                }
+
+                // 构造 dex 文件的 content URI
+                // 路径: content://com.netease.x19.fileprovider/files/../app_ntp0/{versionName}_{versionCode}/.unzip/classes.dex
+                val dexUriStr = "content://com.netease.x19.fileprovider/files/../app_ntp0/${versionName}_${versionCode}/.unzip/classes.dex"
+                val dexUri = Uri.parse(dexUriStr)
+
+                // 尝试读取 URI 判断是否有权限
+                var hasPermission = false
+                try {
+                    val resolver = contentResolver
+                    resolver.takePersistableUriPermission(
+                        dexUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                    val ins = resolver.openInputStream(dexUri)
+                    if (ins != null) {
+                        // 尝试读取几个字节
+                        val buffer = ByteArray(4)
+                        ins.read(buffer)
+                        ins.close()
+                        hasPermission = true
+                    }
+                } catch (e: Exception) {
+                    // 无权限
+                    hasPermission = false
+                }
+
+                if (hasPermission) {
+                    // 已有权限，准备注入
+                    runOnUiThread {
+                        hideLoadingDialog()
+                        Toast.makeText(this, "准备注入", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    // 无权限，通过 StartAnyWhere 授权
+                    // intent2: 指向本应用 MainActivity，携带 dex URI 和特殊标志
+                    val intent2 = Intent()
+                        .setComponent(ComponentName("com.wunelezi.injector", "com.wunelezi.injector.MainActivity"))
+                        .setDataAndType(dexUri, contentResolver.getType(dexUri))
+                        .addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                            Intent.FLAG_ACTIVITY_NEW_TASK
+                        )
+                        .putExtra(STARTANYWHERE_CALLBACK, "true")
+
+                    // intent1: 指向目标包的 AssistActivity，携带 intent2
+                    val intent1 = Intent()
+                        .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
+                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)
+
+                    runOnUiThread {
+                        hideLoadingDialog()
+                        Toast.makeText(this, "正在获取权限...", Toast.LENGTH_SHORT).show()
+                    }
+
+                    // 使用 StartAnyWhere 启动
+                    StartAnyWhere.pullSpecialActivity(this, intent1)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    hideLoadingDialog()
+                    Toast.makeText(this, "注入失败: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * 显示圆圈加载 dialog
+     */
+    private fun showLoadingDialog() {
+        if (loadingDialog?.isShowing == true) return
+        loadingDialog = Dialog(this).apply {
+            setCancelable(false)
+            setCanceledOnTouchOutside(false)
+        }
+        val progressBar = android.widget.ProgressBar(this).apply {
+            isIndeterminate = true
+        }
+        loadingDialog?.setContentView(progressBar)
+        loadingDialog?.window?.let { window ->
+            window.setLayout(200, 200)
+            window.setGravity(Gravity.CENTER)
+            window.setBackgroundDrawableResource(android.R.color.transparent)
+        }
+        loadingDialog?.show()
+    }
+
+    /**
+     * 隐藏加载 dialog
+     */
+    private fun hideLoadingDialog() {
+        loadingDialog?.dismiss()
+        loadingDialog = null
     }
 }

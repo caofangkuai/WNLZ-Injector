@@ -505,7 +505,7 @@ class MainActivity : AppCompatActivity() {
      * 1. 新线程执行，显示加载 dialog
      * 2. 构造目标 dex 的 content URI
      * 3. 尝试读取 URI 判断是否有权限
-     * 4. 无权限：通过 StartAnyWhere 启动 AssistActivity 授权
+     * 4. 无权限：通过 AssistActivity + PendingIntent 授权
      * 5. 有权限：toast "准备注入"
      */
     private fun startStartAnyWhereInjection(targetPackage: String) {
@@ -526,8 +526,8 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // 构造 dex 文件的 content URI
-                // 路径: content://com.netease.x19.fileprovider/files/../app_ntp0/{versionName}_{versionCode}/.unzip/classes.dex
-                val dexUriStr = "content://com.netease.x19.fileprovider/files/../app_ntp0/${versionName}_${versionCode}/.unzip/classes.dex"
+                // 路径: content://com.netease.x19.fileprovider/files/data/data/{packageName}/app_ntp0/{versionName}_{versionCode}/.unzip/classes.dex
+                val dexUriStr = "content://com.netease.x19.fileprovider/files/data/data/$targetPackage/app_ntp0/${versionName}_${versionCode}/.unzip/classes.dex"
                 val dexUri = Uri.parse(dexUriStr)
 
                 // 尝试读取 URI 判断是否有权限
@@ -558,8 +558,8 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this, "准备注入", Toast.LENGTH_SHORT).show()
                     }
                 } else {
-                    // 无权限，通过 StartAnyWhere 授权
-                    // intent2: 指向本应用 MainActivity，携带 dex URI 和特殊标志
+                    // 无权限，通过 AssistActivity + PendingIntent 授权
+                    // intent2: 指向本应用 MainActivity，携带 dex URI
                     val intent2 = Intent()
                         .setComponent(ComponentName("com.wunelezi.injector", "com.wunelezi.injector.MainActivity"))
                         .setDataAndType(dexUri, contentResolver.getType(dexUri))
@@ -571,18 +571,25 @@ class MainActivity : AppCompatActivity() {
                         )
                         .putExtra(STARTANYWHERE_CALLBACK, "true")
 
-                    // intent1: 指向目标包的 AssistActivity，携带 intent2
+                    // 创建 PendingIntent
+                    val pendingIntent = android.app.PendingIntent.getActivity(
+                        this, 0, intent2,
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    // intent1: 指向目标包的 AssistActivity
                     val intent1 = Intent()
                         .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
-                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)
+                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", Intent())
+                    intent1.putExtra("key_extra_pending_intent", pendingIntent)
 
                     runOnUiThread {
                         hideLoadingDialog()
                         Toast.makeText(this, "正在获取权限...", Toast.LENGTH_SHORT).show()
                     }
 
-                    // 使用 StartAnyWhere 启动
-                    StartAnyWhere.pullSpecialActivity(this, intent1)
+                    // 直接 startActivity
+                    startActivity(intent1)
                 }
             } catch (e: Exception) {
                 runOnUiThread {

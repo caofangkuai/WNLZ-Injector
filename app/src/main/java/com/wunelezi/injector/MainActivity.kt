@@ -165,7 +165,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREFS_NAME = "wnlz_prefs"
         private const val KEY_URI_PREFIX = "uri_prefix"
-        private const val DEFAULT_URI_PREFIX = "content://com.netease.x19.fileprovider/name/"
+        private const val DEFAULT_URI_PREFIX = "content://com.netease.x19.fileprovider/files/"
     }
 
     /**

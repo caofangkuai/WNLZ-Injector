@@ -18,4 +18,10 @@
     <string name="method_start_anywhere_desc">利用 Intent 重定向实现任意起点启动</string>
     <string name="supported">已支持</string>
     <string name="not_supported">不支持</string>
+    <string name="btn_select_modules">选择注入模块</string>
+    <string name="label_modules">注入模块</string>
+    <string name="hint_no_module_selected">未选择模块</string>
+    <string name="dialog_module_list_title">选择注入模块</string>
+    <string name="empty_modules">未找到带有 wnlzmodule 标记的应用</string>
+    <string name="toast_modules_saved">已保存 %1$d 个模块</string>
 </resources>

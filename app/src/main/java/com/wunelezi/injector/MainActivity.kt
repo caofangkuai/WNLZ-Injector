@@ -2,6 +2,7 @@ package com.wunelezi.injector
 
 import android.app.Dialog
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
@@ -12,10 +13,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.wunelezi.injector.adapter.AppAdapter
+import com.wunelezi.injector.adapter.ModuleAdapter
 import com.wunelezi.injector.databinding.ActivityMainBinding
 import com.wunelezi.injector.databinding.DialogAppListBinding
+import com.wunelezi.injector.databinding.DialogModuleListBinding
 import com.wunelezi.injector.model.AppInfo
-import com.wunelezi.injector.model.InjectionMethod
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -37,10 +39,16 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
+        // 注入模块选择卡片 —— 点击弹出模块列表
+        binding.cardModules.setOnClickListener { showModuleListDialog() }
+
         // 注入按钮
         binding.btnInject.setOnClickListener {
             onInjectClicked()
         }
+
+        // 恢复已选模块的摘要显示
+        updateModuleSummary()
     }
 
     // ==================== 应用列表对话框 ====================
@@ -96,7 +104,6 @@ class MainActivity : AppCompatActivity() {
         })
 
         dialog.setOnDismissListener {
-            // 清理引用防止内存泄漏
             allApps = emptyList()
         }
 
@@ -121,7 +128,6 @@ class MainActivity : AppCompatActivity() {
         val packages = pm.getInstalledApplications(0)
         return packages
             .filter {
-                // 排除系统应用，保留用户安装的第三方应用
                 (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0
             }
             .sortedBy { pm.getApplicationLabel(it).toString().lowercase() }
@@ -134,6 +140,102 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+    // ==================== 模块列表对话框 ====================
+
+    /**
+     * 弹出模块多选对话框。
+     * 列出 AndroidManifest 中带有 wnlzmodule meta-data 的应用。
+     * 选中状态持久化到 SharedPreferences。
+     */
+    private fun showModuleListDialog() {
+        val dialog = Dialog(this, R.style.Theme_WNLZInjector_NoAnim)
+        val dialogBinding = DialogModuleListBinding.inflate(layoutInflater)
+        dialog.setContentView(dialogBinding.root)
+
+        dialog.window?.let { window ->
+            window.setLayout(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT
+            )
+            window.setGravity(Gravity.CENTER)
+        }
+
+        // 恢复之前持久化的选中状态
+        val savedSelection = ModulePrefs.getSelectedModules(this)
+
+        val adapter = ModuleAdapter { /* 单项点击仅切换勾选 */ }
+        dialogBinding.rvModuleList.layoutManager = LinearLayoutManager(this)
+        dialogBinding.rvModuleList.adapter = adapter
+
+        dialogBinding.btnModuleClose.setOnClickListener { dialog.dismiss() }
+
+        // 确认按钮 —— 保存并更新摘要
+        dialogBinding.btnModuleConfirm.setOnClickListener {
+            val selected = adapter.getSelected()
+            ModulePrefs.saveSelectedModules(this, selected)
+            updateModuleSummary()
+            val msg = getString(R.string.toast_modules_saved, selected.size)
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            dialog.dismiss()
+        }
+
+        dialog.show()
+
+        // 后台加载模块列表
+        dialogBinding.progressBar.visibility = android.view.View.VISIBLE
+        lifecycleScope.launch(Dispatchers.IO) {
+            val modules = loadWnlzModules()
+            withContext(Dispatchers.Main) {
+                dialogBinding.progressBar.visibility = android.view.View.GONE
+                if (modules.isEmpty()) {
+                    dialogBinding.tvEmpty.visibility = android.view.View.VISIBLE
+                } else {
+                    adapter.submitList(modules, savedSelection)
+                }
+            }
+        }
+    }
+
+    /**
+     * 加载所有带有 wnlzmodule meta-data 的应用
+     *
+     * 目标: AndroidManifest 中含有
+     *   <meta-data android:name="wnlzmodule" android:value="true" />
+     */
+    private fun loadWnlzModules(): List<AppInfo> {
+        val pm = packageManager
+        val packages = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        return packages
+            .filter { appInfo ->
+                appInfo.metaData?.let { meta ->
+                    meta.getBoolean("wnlzmodule", false)
+                } ?: false
+            }
+            .sortedBy { pm.getApplicationLabel(it).toString().lowercase() }
+            .map { appInfo ->
+                AppInfo(
+                    appName = pm.getApplicationLabel(appInfo).toString(),
+                    packageName = appInfo.packageName,
+                    icon = appInfo.loadIcon(pm)
+                )
+            }
+    }
+
+    /**
+     * 更新主界面上模块选择的摘要文本
+     */
+    private fun updateModuleSummary() {
+        val selected = ModulePrefs.getSelectedModules(this)
+        binding.tvModuleSummary.text = if (selected.isEmpty()) {
+            getString(R.string.hint_no_module_selected)
+        } else {
+            "已选 ${selected.size} 个模块"
+        }
+        binding.tvModuleSummary.setTextColor(
+            getColor(if (selected.isEmpty()) R.color.text_hint else R.color.text_primary)
+        )
+    }
+
     // ==================== 注入按钮逻辑 ====================
 
     /**
@@ -143,12 +245,6 @@ class MainActivity : AppCompatActivity() {
         val packageName = binding.etPackageName.text?.toString()?.trim().orEmpty()
         if (packageName.isEmpty()) {
             Toast.makeText(this, R.string.toast_no_package, Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val method = binding.methodSelector.getSelectedMethod()
-        if (method == null) {
-            Toast.makeText(this, R.string.toast_no_method, Toast.LENGTH_SHORT).show()
             return
         }
 

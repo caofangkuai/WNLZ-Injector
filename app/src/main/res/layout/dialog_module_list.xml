@@ -77,13 +77,16 @@
         android:background="@color/stroke" />
 
     <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnModuleConfirm"
+        android:id="@+id/btnImport"
         android:layout_width="match_parent"
         android:layout_height="48dp"
         android:layout_margin="16dp"
-        android:text="@string/action_confirm"
+        android:text="@string/btn_import"
         android:textColor="@color/white"
         app:backgroundTint="@color/primary"
-        app:cornerRadius="12dp" />
+        app:cornerRadius="12dp"
+        app:icon="@android:drawable/ic_menu_add"
+        app:iconTint="@color/white"
+        app:iconGravity="textStart" />
 
 </LinearLayout>

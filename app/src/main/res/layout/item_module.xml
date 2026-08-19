@@ -7,56 +7,58 @@
     android:orientation="horizontal"
     android:gravity="center_vertical"
     android:paddingHorizontal="20dp"
-    android:paddingVertical="12dp"
-    android:clickable="true"
-    android:focusable="true"
-    android:foreground="?attr/selectableItemBackground">
-
-    <ImageView
-        android:id="@+id/ivModuleIcon"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:scaleType="centerCrop"
-        android:contentDescription="@null" />
+    android:paddingVertical="14dp"
+    android:background="@color/surface">
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:layout_marginStart="14dp"
         android:orientation="vertical">
 
         <TextView
             android:id="@+id/tvModuleName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="15sp"
+            android:textSize="16sp"
+            android:textStyle="bold"
             android:textColor="@color/text_primary"
             android:singleLine="true"
             android:ellipsize="end"
             tools:ignore="HardcodedText"
-            android:text="Module Name" />
+            android:text="模块名称" />
 
         <TextView
-            android:id="@+id/tvModulePackage"
+            android:id="@+id/tvModuleAuthor"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:textSize="12sp"
-            android:textColor="@color/text_hint"
+            android:layout_marginTop="3dp"
+            android:textSize="13sp"
+            android:textColor="@color/text_secondary"
             android:singleLine="true"
             android:ellipsize="end"
             tools:ignore="HardcodedText"
-            android:text="com.example.module" />
+            android:text="作者: 未知" />
+
+        <TextView
+            android:id="@+id/tvModuleZipName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textSize="11sp"
+            android:textColor="@color/text_hint"
+            android:singleLine="true"
+            android:ellipsize="middle"
+            tools:ignore="HardcodedText"
+            android:text="xxx.zip" />
 
     </LinearLayout>
 
-    <CheckBox
-        android:id="@+id/cbModule"
+    <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:clickable="false"
-        android:focusable="false"
-        android:contentDescription="@null" />
+        android:text="右滑删除"
+        android:textSize="12sp"
+        android:textColor="@color/text_hint" />
 
 </LinearLayout>

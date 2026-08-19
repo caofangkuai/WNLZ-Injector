@@ -1,0 +1,360 @@
+package com.wunelezi.injector.util
+
+import android.content.Context
+import android.net.Uri
+import com.wunelezi.injector.model.ModuleInfo
+import org.json.JSONObject
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.util.UUID
+import java.util.zip.ZipInputStream
+
+/**
+ * 插件管理器
+ *
+ * 核心逻辑：
+ * 1. 通过 content:// URI 读取目标包的 plugins.txt
+ * 2. 如果不存在，通过 FileHelper 漏洞方案创建，不行用 Shizuku
+ * 3. 遍历 zip 中的 info.json，解析 name 和 author
+ * 4. 删除：从 plugins.txt 移除条目 + 删除 zip 文件
+ * 5. 导入：SAF 选择文件 → 以 UUID.zip 写入目标路径 → 更新 plugins.txt
+ */
+object PluginManager {
+
+    /** 获取目标包名的 content URI 前缀 */
+    fun getBaseContentUri(packageName: String): String {
+        return "content://$packageName.widget_file_provider/widget_external_files/WNLZ-Injector/"
+    }
+
+    /** plugins.txt 的 content URI */
+    fun getPluginsTxtUri(packageName: String): String {
+        return getBaseContentUri(packageName) + "plugins.txt"
+    }
+
+    /** 某个 zip 的 content URI */
+    fun getZipUri(packageName: String, zipName: String): String {
+        return getBaseContentUri(packageName) + zipName
+    }
+
+    /** 获取目标包名的 Android/data 外部文件路径 */
+    fun getBaseFilePath(packageName: String): String {
+        return "/sdcard/Android/data/$packageName/files/WNLZ-Injector/"
+    }
+
+    /** plugins.txt 的文件路径 */
+    fun getPluginsTxtPath(packageName: String): String {
+        return getBaseFilePath(packageName) + "plugins.txt"
+    }
+
+    /**
+     * 读取 plugins.txt，返回 zip 名称列表
+     *
+     * 如果 content URI 读取失败，尝试创建文件后重试
+     */
+    fun readPluginsTxt(context: Context, packageName: String): List<String> {
+        val pluginsUri = getPluginsTxtUri(packageName)
+
+        // 尝试通过 content URI 读取
+        var content = UriHelper.readUri(context, pluginsUri)
+
+        if (content == null) {
+            // content URI 读取失败，尝试创建文件
+            ensurePluginsTxtExists(context, packageName)
+            // 重试读取
+            content = UriHelper.readUri(context, pluginsUri)
+        }
+
+        if (content.isNullOrBlank()) return emptyList()
+
+        return content.lines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.endsWith(".zip") }
+    }
+
+    /**
+     * 确保 plugins.txt 文件存在
+     *
+     * 策略：FileHelper 漏洞方案 → Shizuku
+     */
+    fun ensurePluginsTxtExists(context: Context, packageName: String): Boolean {
+        val pluginsPath = getPluginsTxtPath(packageName)
+        val pluginsDir = getBaseFilePath(packageName)
+
+        // 方案1：FileHelper 漏洞方案直接创建
+        val revisedDir = FileHelper.getReviseFile(File(pluginsDir))
+        val revisedFile = FileHelper.getReviseFile(File(pluginsPath))
+
+        try {
+            // 创建目录
+            val actualDir = revisedDir ?: File(pluginsDir)
+            if (!actualDir.exists()) {
+                actualDir.mkdirs()
+            }
+            // 创建文件
+            val actualFile = revisedFile ?: File(pluginsPath)
+            if (!actualFile.exists()) {
+                actualFile.parentFile?.mkdirs()
+                actualFile.createNewFile()
+            }
+            if (actualFile.exists()) return true
+        } catch (e: Exception) {
+            // 忽略，继续尝试 Shizuku
+        }
+
+        // 方案2：Shizuku 授权创建
+        if (ShizukuHelper.isAvailable()) {
+            if (ShizukuHelper.hasPermission()) {
+                return createPluginsTxtViaShizuku(packageName)
+            }
+            // 无权限，返回 false 由调用方处理
+            return false
+        }
+
+        return false
+    }
+
+    /**
+     * 通过 Shizuku 创建 plugins.txt
+     */
+    private fun createPluginsTxtViaShizuku(packageName: String): Boolean {
+        val pluginsPath = getPluginsTxtPath(packageName)
+        val pluginsDir = getBaseFilePath(packageName)
+        ShizukuHelper.ensureDir(pluginsDir)
+        return ShizukuHelper.createFile(pluginsPath)
+    }
+
+    /**
+     * 从 zip 中读取 info.json，解析 name 和 author
+     */
+    fun readZipInfo(context: Context, packageName: String, zipName: String): ModuleInfo? {
+        val zipUri = getZipUri(packageName, zipName)
+
+        // 尝试通过 content URI 读取
+        var ins: InputStream? = UriHelper.openInputStream(context, zipUri)
+
+        if (ins == null) {
+            // content URI 失败，尝试直接文件读取
+            val zipPath = getBaseFilePath(packageName) + zipName
+            val revisedPath = FileHelper.getRevisePath(zipPath)
+            val zipFile = File(revisedPath ?: zipPath)
+            if (zipFile.exists()) {
+                ins = FileInputStream(zipFile)
+            }
+        }
+
+        if (ins == null) return null
+
+        return try {
+            val zis = ZipInputStream(ins)
+            var entry = zis.nextEntry
+            var infoJson: String? = null
+            while (entry != null) {
+                if (entry.name == "info.json") {
+                    val bytes = zis.readBytes()
+                    infoJson = String(bytes, Charsets.UTF_8)
+                    break
+                }
+                entry = zis.nextEntry
+            }
+            zis.close()
+
+            if (infoJson != null) {
+                val json = JSONObject(infoJson)
+                val name = json.optString("name", zipName)
+                val author = json.optString("author", "未知")
+                ModuleInfo(zipName = zipName, name = name, author = author)
+            } else {
+                // 没有 info.json，用 zip 名作为模块名
+                ModuleInfo(zipName = zipName, name = zipName, author = "未知")
+            }
+        } catch (e: Exception) {
+            ModuleInfo(zipName = zipName, name = zipName, author = "读取失败")
+        }
+    }
+
+    /**
+     * 加载所有模块信息
+     */
+    fun loadModules(context: Context, packageName: String): List<ModuleInfo> {
+        val zipNames = readPluginsTxt(context, packageName)
+        return zipNames.mapNotNull { zipName ->
+            readZipInfo(context, packageName, zipName)
+        }
+    }
+
+    /**
+     * 删除模块
+     *
+     * 1. 从 plugins.txt 移除条目
+     * 2. 删除实际 zip 文件
+     */
+    fun deletePlugin(context: Context, packageName: String, zipName: String): Boolean {
+        // 1. 读取当前列表
+        val current = readPluginsTxt(context, packageName).toMutableList()
+        current.remove(zipName)
+
+        // 2. 写回 plugins.txt
+        val updatedContent = current.joinToString("\n") + if (current.isNotEmpty()) "\n" else ""
+        val pluginsUri = getPluginsTxtUri(packageName)
+        var writeOk = UriHelper.writeUri(context, pluginsUri, updatedContent)
+
+        if (!writeOk) {
+            // content URI 写入失败，尝试文件写入
+            val pluginsPath = getPluginsTxtPath(packageName)
+            val revisedPath = FileHelper.getRevisePath(pluginsPath)
+            try {
+                val file = File(revisedPath ?: pluginsPath)
+                file.writeText(updatedContent)
+                writeOk = true
+            } catch (e: Exception) {
+                // 尝试 Shizuku
+                if (ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()) {
+                    // 写入临时文件再用 Shizuku 移动
+                    val tmpFile = File(context.cacheDir, "plugins_tmp.txt")
+                    tmpFile.writeText(updatedContent)
+                    ShizukuHelper.copyToTarget(tmpFile.absolutePath, pluginsPath)
+                    tmpFile.delete()
+                    writeOk = true
+                }
+            }
+        }
+
+        // 3. 删除 zip 文件
+        val zipUri = getZipUri(packageName, zipName)
+        try {
+            // 通过 content URI 删除
+            val uri = Uri.parse(zipUri)
+            context.contentResolver.delete(uri, null, null)
+        } catch (e: Exception) {
+            // 忽略，尝试文件删除
+        }
+
+        // 尝试文件删除
+        val zipPath = getBaseFilePath(packageName) + zipName
+        val revisedZipPath = FileHelper.getRevisePath(zipPath)
+        try {
+            val zipFile = File(revisedZipPath ?: zipPath)
+            if (zipFile.exists()) zipFile.delete()
+        } catch (e: Exception) {
+            // Shizuku 删除
+            if (ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()) {
+                ShizukuHelper.deleteFile(zipPath)
+            }
+        }
+
+        return writeOk
+    }
+
+    /**
+     * 导入插件
+     *
+     * 1. 将 SAF 选择的文件复制为 UUID.zip 到目标路径
+     * 2. 更新 plugins.txt
+     */
+    fun importPlugin(context: Context, packageName: String, sourceUri: Uri): Boolean {
+        val uuid = UUID.randomUUID().toString()
+        val zipName = "$uuid.zip"
+        val zipPath = getBaseFilePath(packageName) + zipName
+        val zipUri = getZipUri(packageName, zipName)
+
+        var writeOk = false
+
+        // 方案1：通过 content URI 写入
+        val dstOs = UriHelper.openOutputStream(context, zipUri)
+        if (dstOs != null) {
+            try {
+                val srcIns = context.contentResolver.openInputStream(sourceUri)
+                if (srcIns != null) {
+                    srcIns.use { input ->
+                        dstOs.use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    writeOk = true
+                }
+            } catch (e: Exception) {
+                // 忽略
+            }
+        }
+
+        if (!writeOk) {
+            // 方案2：FileHelper 漏洞方案
+            val revisedPath = FileHelper.getRevisePath(zipPath)
+            val dirPath = getBaseFilePath(packageName)
+            try {
+                val dir = FileHelper.getReviseFile(File(dirPath)) ?: File(dirPath)
+                if (!dir.exists()) dir.mkdirs()
+                val file = FileHelper.getReviseFile(File(zipPath)) ?: File(zipPath)
+                file.parentFile?.mkdirs()
+                val srcIns = context.contentResolver.openInputStream(sourceUri)
+                if (srcIns != null) {
+                    srcIns.use { input ->
+                        FileOutputStream(file).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    writeOk = true
+                }
+            } catch (e: Exception) {
+                // 忽略
+            }
+        }
+
+        if (!writeOk) {
+            // 方案3：Shizuku
+            if (ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()) {
+                // 先写到 app 自己的缓存
+                val tmpFile = File(context.cacheDir, "import_$uuid.zip")
+                try {
+                    val srcIns = context.contentResolver.openInputStream(sourceUri)
+                    if (srcIns != null) {
+                        srcIns.use { input ->
+                            FileOutputStream(tmpFile).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        // Shizuku 复制到目标
+                        ShizukuHelper.copyToTarget(tmpFile.absolutePath, zipPath)
+                        writeOk = true
+                    }
+                } catch (e: Exception) {
+                    // 忽略
+                } finally {
+                    tmpFile.delete()
+                }
+            }
+        }
+
+        if (!writeOk) return false
+
+        // 更新 plugins.txt
+        val current = readPluginsTxt(context, packageName).toMutableList()
+        current.add(zipName)
+        val updatedContent = current.joinToString("\n") + "\n"
+        val pluginsUri = getPluginsTxtUri(packageName)
+        var updated = UriHelper.writeUri(context, pluginsUri, updatedContent)
+
+        if (!updated) {
+            // 尝试文件写入
+            val pluginsPath = getPluginsTxtPath(packageName)
+            val revisedPath = FileHelper.getRevisePath(pluginsPath)
+            try {
+                val file = File(revisedPath ?: pluginsPath)
+                file.writeText(updatedContent)
+                updated = true
+            } catch (e: Exception) {
+                if (ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()) {
+                    val tmpFile = File(context.cacheDir, "plugins_tmp.txt")
+                    tmpFile.writeText(updatedContent)
+                    ShizukuHelper.copyToTarget(tmpFile.absolutePath, pluginsPath)
+                    tmpFile.delete()
+                    updated = true
+                }
+            }
+        }
+
+        return updated
+    }
+}

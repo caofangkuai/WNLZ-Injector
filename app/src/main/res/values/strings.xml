@@ -20,8 +20,18 @@
     <string name="not_supported">不支持</string>
     <string name="btn_select_modules">选择注入模块</string>
     <string name="label_modules">注入模块</string>
-    <string name="hint_no_module_selected">未选择模块</string>
-    <string name="dialog_module_list_title">选择注入模块</string>
-    <string name="empty_modules">未找到带有 wnlzmodule 标记的应用</string>
-    <string name="toast_modules_saved">已保存 %1$d 个模块</string>
+    <string name="hint_no_module">未加载模块</string>
+    <string name="dialog_module_list_title">注入模块</string>
+    <string name="empty_modules">暂无模块，点击下方导入按钮添加</string>
+    <string name="btn_import">导入插件</string>
+    <string name="toast_import_success">导入成功</string>
+    <string name="toast_import_failed">导入失败</string>
+    <string name="toast_delete_success">已删除</string>
+    <string name="toast_delete_failed">删除失败</string>
+    <string name="toast_shizuku_needed">需要 Shizuku 授权才能操作文件</string>
+    <string name="toast_shizuku_not_running">Shizuku 未运行</string>
+    <string name="toast_read_failed">读取插件列表失败</string>
+    <string name="action_revoke_permissions">释放所有权限</string>
+    <string name="toast_permissions_revoked">已释放所有权限</string>
+    <string name="toast_permissions_revoke_failed">释放失败</string>
 </resources>

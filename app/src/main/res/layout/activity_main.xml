@@ -156,7 +156,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:text="@string/hint_no_module_selected"
+                    android:text="@string/hint_no_module"
                     android:textSize="15sp"
                     android:textColor="@color/text_hint" />
 

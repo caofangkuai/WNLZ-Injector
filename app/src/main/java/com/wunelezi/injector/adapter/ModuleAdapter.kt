@@ -4,19 +4,14 @@ import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.wunelezi.injector.databinding.ItemModuleBinding
-import com.wunelezi.injector.model.AppInfo
+import com.wunelezi.injector.model.ModuleInfo
 
 /**
- * 模块多选适配器
- *
- * 点击 item 切换勾选状态
+ * 模块列表适配器（只读展示，删除通过 ItemTouchHelper 处理）
  */
 class ModuleAdapter(
-    private val onItemClick: (AppInfo) -> Unit
+    private val modules: List<ModuleInfo>
 ) : RecyclerView.Adapter<ModuleAdapter.ViewHolder>() {
-
-    private val modules = mutableListOf<AppInfo>()
-    private val selected = mutableSetOf<String>()  // 选中的包名集合
 
     class ViewHolder(val binding: ItemModuleBinding) : RecyclerView.ViewHolder(binding.root)
 
@@ -30,40 +25,14 @@ class ModuleAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val module = modules[position]
         with(holder.binding) {
-            ivModuleIcon.setImageDrawable(module.icon)
-            tvModuleName.text = module.appName
-            tvModulePackage.text = module.packageName
-            cbModule.isChecked = selected.contains(module.packageName)
-            root.setOnClickListener {
-                if (selected.contains(module.packageName)) {
-                    selected.remove(module.packageName)
-                } else {
-                    selected.add(module.packageName)
-                }
-                notifyItemChanged(position)
-                onItemClick(module)
-            }
+            tvModuleName.text = module.name
+            tvModuleAuthor.text = "作者: ${module.author}"
+            tvModuleZipName.text = module.zipName
         }
     }
 
     override fun getItemCount(): Int = modules.size
 
-    /** 提交数据并恢复选中状态 */
-    fun submitList(list: List<AppInfo>, preselected: Set<String> = emptySet()) {
-        modules.clear()
-        modules.addAll(list)
-        selected.clear()
-        selected.addAll(preselected)
-        notifyDataSetChanged()
-    }
-
-    /** 获取选中的包名集合 */
-    fun getSelected(): Set<String> = selected.toSet()
-
-    /** 设置选中集合 */
-    fun setSelected(packages: Set<String>) {
-        selected.clear()
-        selected.addAll(packages)
-        notifyDataSetChanged()
-    }
+    /** 获取指定位置的模块 */
+    fun getItem(position: Int): ModuleInfo = modules[position]
 }

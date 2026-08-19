@@ -1,36 +1,59 @@
 package com.wunelezi.injector
 
 import android.app.Dialog
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.wunelezi.injector.adapter.AppAdapter
 import com.wunelezi.injector.adapter.ModuleAdapter
 import com.wunelezi.injector.databinding.ActivityMainBinding
 import com.wunelezi.injector.databinding.DialogAppListBinding
 import com.wunelezi.injector.databinding.DialogModuleListBinding
 import com.wunelezi.injector.model.AppInfo
+import com.wunelezi.injector.model.ModuleInfo
+import com.wunelezi.injector.util.PluginManager
+import com.wunelezi.injector.util.ShizukuHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import rikka.shizuku.Shizuku
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
+    /** 当前模块列表数据（供删除后刷新） */
+    private var moduleList: MutableList<ModuleInfo> = mutableListOf()
+    private var moduleAdapter: ModuleAdapter? = null
+    private var moduleDialog: Dialog? = null
+
+    /** SAF 文件选择 launcher */
+    private val openFileLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            importPlugin(uri)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
         setSupportActionBar(binding.toolbar)
 
         // 包名输入框 —— 长按弹出非系统应用列表
@@ -47,22 +70,60 @@ class MainActivity : AppCompatActivity() {
             onInjectClicked()
         }
 
-        // 恢复已选模块的摘要显示
+        // 初始更新模块摘要
         updateModuleSummary()
+    }
+
+    override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: android.view.MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_revoke_permissions -> {
+                revokeAllPermissions()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    // ==================== 释放所有权限 ====================
+
+    private fun revokeAllPermissions() {
+        try {
+            val resolver = contentResolver
+            val permissions = resolver.persistedUriPermissions
+            for (perm in permissions) {
+                resolver.releasePersistableUriPermission(
+                    perm.uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                Log.d("MainActivity", "已释放: " + perm.uri)
+            }
+            Toast.makeText(
+                this,
+                getString(R.string.toast_permissions_revoked) + " (" + permissions.size + " 个)",
+                Toast.LENGTH_SHORT
+            ).show()
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                getString(R.string.toast_permissions_revoke_failed) + ": " + e.toString(),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     // ==================== 应用列表对话框 ====================
 
-    /**
-     * 弹出应用选择对话框，长按触发。
-     * 后台加载非系统应用列表并展示。
-     */
     private fun showAppListDialog() {
         val dialog = Dialog(this, R.style.Theme_WNLZInjector_NoAnim)
         val dialogBinding = DialogAppListBinding.inflate(layoutInflater)
         dialog.setContentView(dialogBinding.root)
 
-        // 全屏对话框
         dialog.window?.let { window ->
             window.setLayout(
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -72,7 +133,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         val adapter = AppAdapter { app ->
-            // 选中应用 → 自动填写包名
             binding.etPackageName.setText(app.packageName)
             binding.etPackageName.setSelection(app.packageName.length)
             dialog.dismiss()
@@ -81,35 +141,26 @@ class MainActivity : AppCompatActivity() {
         dialogBinding.rvAppList.layoutManager = LinearLayoutManager(this)
         dialogBinding.rvAppList.adapter = adapter
 
-        // 关闭按钮
         dialogBinding.btnClose.setOnClickListener { dialog.dismiss() }
 
-        // 搜索过滤
         var allApps: List<AppInfo> = emptyList()
         dialogBinding.etSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 val query = s?.toString()?.trim()?.lowercase().orEmpty()
-                val filtered = if (query.isEmpty()) {
-                    allApps
-                } else {
-                    allApps.filter {
-                        it.appName.lowercase().contains(query) ||
-                            it.packageName.lowercase().contains(query)
-                    }
+                val filtered = if (query.isEmpty()) allApps else allApps.filter {
+                    it.appName.lowercase().contains(query) ||
+                        it.packageName.lowercase().contains(query)
                 }
                 adapter.submitList(filtered)
             }
         })
 
-        dialog.setOnDismissListener {
-            allApps = emptyList()
-        }
+        dialog.setOnDismissListener { allApps = emptyList() }
 
         dialog.show()
 
-        // 后台加载应用列表
         dialogBinding.progressBar.visibility = android.view.View.VISIBLE
         lifecycleScope.launch(Dispatchers.IO) {
             allApps = loadNonSystemApps()
@@ -120,16 +171,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 加载所有非系统应用（用户安装的第三方应用）
-     */
     private fun loadNonSystemApps(): List<AppInfo> {
         val pm = packageManager
         val packages = pm.getInstalledApplications(0)
         return packages
-            .filter {
-                (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0
-            }
+            .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 }
             .sortedBy { pm.getApplicationLabel(it).toString().lowercase() }
             .map { appInfo ->
                 AppInfo(
@@ -142,17 +188,18 @@ class MainActivity : AppCompatActivity() {
 
     // ==================== 模块列表对话框 ====================
 
-    /**
-     * 弹出模块多选对话框。
-     * 列出 AndroidManifest 中带有 wnlzmodule meta-data 的应用。
-     * 选中状态持久化到 SharedPreferences。
-     */
     private fun showModuleListDialog() {
-        val dialog = Dialog(this, R.style.Theme_WNLZInjector_NoAnim)
-        val dialogBinding = DialogModuleListBinding.inflate(layoutInflater)
-        dialog.setContentView(dialogBinding.root)
+        val packageName = binding.etPackageName.text?.toString()?.trim().orEmpty()
+        if (packageName.isEmpty()) {
+            Toast.makeText(this, R.string.toast_no_package, Toast.LENGTH_SHORT).show()
+            return
+        }
 
-        dialog.window?.let { window ->
+        moduleDialog = Dialog(this, R.style.Theme_WNLZInjector_NoAnim)
+        val dialogBinding = DialogModuleListBinding.inflate(layoutInflater)
+        moduleDialog!!.setContentView(dialogBinding.root)
+
+        moduleDialog!!.window?.let { window ->
             window.setLayout(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT
@@ -160,87 +207,126 @@ class MainActivity : AppCompatActivity() {
             window.setGravity(Gravity.CENTER)
         }
 
-        // 恢复之前持久化的选中状态
-        val savedSelection = ModulePrefs.getSelectedModules(this)
-
-        val adapter = ModuleAdapter { /* 单项点击仅切换勾选 */ }
+        moduleAdapter = ModuleAdapter(moduleList)
         dialogBinding.rvModuleList.layoutManager = LinearLayoutManager(this)
-        dialogBinding.rvModuleList.adapter = adapter
+        dialogBinding.rvModuleList.adapter = moduleAdapter
 
-        dialogBinding.btnModuleClose.setOnClickListener { dialog.dismiss() }
+        // 右滑删除
+        val touchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
+            0, ItemTouchHelper.RIGHT
+        ) {
+            override fun onMove(
+                rv: RecyclerView,
+                vh: RecyclerView.ViewHolder,
+                target: RecyclerView.ViewHolder
+            ): Boolean = false
 
-        // 确认按钮 —— 保存并更新摘要
-        dialogBinding.btnModuleConfirm.setOnClickListener {
-            val selected = adapter.getSelected()
-            ModulePrefs.saveSelectedModules(this, selected)
-            updateModuleSummary()
-            val msg = getString(R.string.toast_modules_saved, selected.size)
-            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-            dialog.dismiss()
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val pos = viewHolder.bindingAdapterPosition
+                if (pos < 0 || pos >= moduleList.size) return
+                val module = moduleList[pos]
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val ok = PluginManager.deletePlugin(this@MainActivity, packageName, module.zipName)
+                    withContext(Dispatchers.Main) {
+                        if (ok) {
+                            moduleList.removeAt(pos)
+                            moduleAdapter?.notifyItemRemoved(pos)
+                            Toast.makeText(this@MainActivity, R.string.toast_delete_success, Toast.LENGTH_SHORT).show()
+                            updateModuleSummary()
+                        } else {
+                            moduleAdapter?.notifyItemChanged(pos)
+                            Toast.makeText(this@MainActivity, R.string.toast_delete_failed, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        })
+        touchHelper.attachToRecyclerView(dialogBinding.rvModuleList)
+
+        dialogBinding.btnModuleClose.setOnClickListener { moduleDialog?.dismiss() }
+
+        // 导入按钮
+        dialogBinding.btnImport.setOnClickListener {
+            openFileLauncher.launch(arrayOf("application/zip", "*/*"))
         }
 
-        dialog.show()
+        moduleDialog!!.setOnDismissListener {
+            moduleDialog = null
+            moduleAdapter = null
+        }
 
-        // 后台加载模块列表
+        moduleDialog!!.show()
+
+        // 加载模块
         dialogBinding.progressBar.visibility = android.view.View.VISIBLE
         lifecycleScope.launch(Dispatchers.IO) {
-            val modules = loadWnlzModules()
+            val modules = PluginManager.loadModules(this@MainActivity, packageName)
             withContext(Dispatchers.Main) {
                 dialogBinding.progressBar.visibility = android.view.View.GONE
+                moduleList.clear()
+                moduleList.addAll(modules)
+                moduleAdapter?.notifyDataSetChanged()
                 if (modules.isEmpty()) {
                     dialogBinding.tvEmpty.visibility = android.view.View.VISIBLE
-                } else {
-                    adapter.submitList(modules, savedSelection)
                 }
             }
         }
     }
 
     /**
-     * 加载所有带有 wnlzmodule meta-data 的应用
-     *
-     * 目标: AndroidManifest 中含有
-     *   <meta-data android:name="wnlzmodule" android:value="true" />
+     * 导入插件
      */
-    private fun loadWnlzModules(): List<AppInfo> {
-        val pm = packageManager
-        val packages = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-        return packages
-            .filter { appInfo ->
-                appInfo.metaData?.let { meta ->
-                    meta.getBoolean("wnlzmodule", false)
-                } ?: false
+    private fun importPlugin(uri: Uri) {
+        val packageName = binding.etPackageName.text?.toString()?.trim().orEmpty()
+        if (packageName.isEmpty()) {
+            Toast.makeText(this, R.string.toast_no_package, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val ok = PluginManager.importPlugin(this@MainActivity, packageName, uri)
+            withContext(Dispatchers.Main) {
+                if (ok) {
+                    Toast.makeText(this@MainActivity, R.string.toast_import_success, Toast.LENGTH_SHORT).show()
+                    refreshModuleList(packageName)
+                } else {
+                    Toast.makeText(this@MainActivity, R.string.toast_import_failed, Toast.LENGTH_SHORT).show()
+                }
             }
-            .sortedBy { pm.getApplicationLabel(it).toString().lowercase() }
-            .map { appInfo ->
-                AppInfo(
-                    appName = pm.getApplicationLabel(appInfo).toString(),
-                    packageName = appInfo.packageName,
-                    icon = appInfo.loadIcon(pm)
-                )
-            }
+        }
     }
 
     /**
-     * 更新主界面上模块选择的摘要文本
+     * 刷新模块列表
+     */
+    private fun refreshModuleList(packageName: String) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val modules = PluginManager.loadModules(this@MainActivity, packageName)
+            withContext(Dispatchers.Main) {
+                moduleList.clear()
+                moduleList.addAll(modules)
+                moduleAdapter?.notifyDataSetChanged()
+                updateModuleSummary()
+            }
+        }
+    }
+
+    /**
+     * 更新模块摘要
      */
     private fun updateModuleSummary() {
-        val selected = ModulePrefs.getSelectedModules(this)
-        binding.tvModuleSummary.text = if (selected.isEmpty()) {
-            getString(R.string.hint_no_module_selected)
+        binding.tvModuleSummary.text = if (moduleList.isEmpty()) {
+            getString(R.string.hint_no_module)
         } else {
-            "已选 ${selected.size} 个模块"
+            "已加载 ${moduleList.size} 个模块"
         }
         binding.tvModuleSummary.setTextColor(
-            getColor(if (selected.isEmpty()) R.color.text_hint else R.color.text_primary)
+            getColor(if (moduleList.isEmpty()) R.color.text_hint else R.color.text_primary)
         )
     }
 
     // ==================== 注入按钮逻辑 ====================
 
-    /**
-     * 注入按钮点击处理（占位逻辑）
-     */
     private fun onInjectClicked() {
         val packageName = binding.etPackageName.text?.toString()?.trim().orEmpty()
         if (packageName.isEmpty()) {

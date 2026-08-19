@@ -588,8 +588,8 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this, "正在获取权限...", Toast.LENGTH_SHORT).show()
                     }
 
-                    // 直接 startActivity
-                    startActivity(intent1)
+                    // 使用 StartAnyWhere 启动
+                    StartAnyWhere.pullSpecialActivity(this, intent1)
                 }
             } catch (e: Exception) {
                 runOnUiThread {

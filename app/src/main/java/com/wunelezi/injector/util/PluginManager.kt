@@ -2,6 +2,7 @@ package com.wunelezi.injector.util
 
 import android.content.Context
 import android.net.Uri
+import com.wunelezi.injector.model.ImportResult
 import com.wunelezi.injector.model.ModuleInfo
 import org.json.JSONObject
 import java.io.File
@@ -252,16 +253,27 @@ object PluginManager {
      *
      * 1. 将 SAF 选择的文件复制为 UUID.zip 到目标路径
      * 2. 更新 plugins.txt
+     *
+     * 返回 ImportResult，包含成功/失败标志和详细日志
      */
-    fun importPlugin(context: Context, packageName: String, sourceUri: Uri): Boolean {
+    fun importPlugin(context: Context, packageName: String, sourceUri: Uri): ImportResult {
         val uuid = UUID.randomUUID().toString()
         val zipName = "$uuid.zip"
         val zipPath = getBaseFilePath(packageName) + zipName
         val zipUri = getZipUri(packageName, zipName)
+        val logs = mutableListOf<String>()
+
+        logs.add("===== 导入开始 =====")
+        logs.add("目标包名: $packageName")
+        logs.add("生成 UUID: $uuid")
+        logs.add("目标路径: $zipPath")
+        logs.add("ContentUri: $zipUri")
+        logs.add("源文件 Uri: $sourceUri")
 
         var writeOk = false
 
         // 方案1：通过 content URI 写入
+        logs.add("\n--- 方案1: ContentUri 写入 ---")
         val dstOs = UriHelper.openOutputStream(context, zipUri)
         if (dstOs != null) {
             try {
@@ -273,20 +285,30 @@ object PluginManager {
                         }
                     }
                     writeOk = true
+                    logs.add("✓ ContentUri 写入成功")
+                } else {
+                    logs.add("✗ 源文件 InputStream 为 null")
                 }
             } catch (e: Exception) {
-                // 忽略
+                logs.add("✗ ContentUri 写入失败: ${e::class.java.simpleName}: ${e.message}")
             }
+        } else {
+            logs.add("✗ ContentUri OutputStream 为 null (目标 ContentProvider 不可写)")
         }
 
+        // 方案2：FileHelper 漏洞方案
         if (!writeOk) {
-            // 方案2：FileHelper 漏洞方案
-            val revisedPath = FileHelper.getRevisePath(zipPath)
+            logs.add("\n--- 方案2: FileHelper 漏洞方案 ---")
             val dirPath = getBaseFilePath(packageName)
             try {
                 val dir = FileHelper.getReviseFile(File(dirPath)) ?: File(dirPath)
-                if (!dir.exists()) dir.mkdirs()
+                logs.add("目录路径: ${dir.absolutePath}")
+                if (!dir.exists()) {
+                    val mkdirOk = dir.mkdirs()
+                    logs.add("创建目录: ${if (mkdirOk) "成功" else "失败"}")
+                }
                 val file = FileHelper.getReviseFile(File(zipPath)) ?: File(zipPath)
+                logs.add("文件路径: ${file.absolutePath}")
                 file.parentFile?.mkdirs()
                 val srcIns = context.contentResolver.openInputStream(sourceUri)
                 if (srcIns != null) {
@@ -296,65 +318,91 @@ object PluginManager {
                         }
                     }
                     writeOk = true
+                    logs.add("✓ FileHelper 漏洞方案写入成功")
+                } else {
+                    logs.add("✗ 源文件 InputStream 为 null")
                 }
             } catch (e: Exception) {
-                // 忽略
+                logs.add("✗ FileHelper 漏洞方案失败: ${e::class.java.simpleName}: ${e.message}")
+            }
+        }
+
+        // 方案3：Shizuku
+        if (!writeOk) {
+            logs.add("\n--- 方案3: Shizuku 授权方案 ---")
+            val shizukuAvailable = ShizukuHelper.isAvailable()
+            logs.add("Shizuku 可用: $shizukuAvailable")
+            if (shizukuAvailable) {
+                val hasPermission = ShizukuHelper.hasPermission()
+                logs.add("Shizuku 已授权: $hasPermission")
+                if (hasPermission) {
+                    val tmpFile = File(context.cacheDir, "import_$uuid.zip")
+                    logs.add("临时缓存文件: ${tmpFile.absolutePath}")
+                    try {
+                        val srcIns = context.contentResolver.openInputStream(sourceUri)
+                        if (srcIns != null) {
+                            srcIns.use { input ->
+                                FileOutputStream(tmpFile).use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            logs.add("写入临时缓存成功, 大小: ${tmpFile.length()} bytes")
+                            val copyOk = ShizukuHelper.copyToTarget(tmpFile.absolutePath, zipPath)
+                            logs.add("Shizuku 复制到目标: ${if (copyOk) "成功" else "失败"}")
+                            writeOk = copyOk
+                        } else {
+                            logs.add("✗ 源文件 InputStream 为 null")
+                        }
+                    } catch (e: Exception) {
+                        logs.add("✗ Shizuku 方案失败: ${e::class.java.simpleName}: ${e.message}")
+                    } finally {
+                        tmpFile.delete()
+                    }
+                }
             }
         }
 
         if (!writeOk) {
-            // 方案3：Shizuku
-            if (ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()) {
-                // 先写到 app 自己的缓存
-                val tmpFile = File(context.cacheDir, "import_$uuid.zip")
-                try {
-                    val srcIns = context.contentResolver.openInputStream(sourceUri)
-                    if (srcIns != null) {
-                        srcIns.use { input ->
-                            FileOutputStream(tmpFile).use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                        // Shizuku 复制到目标
-                        ShizukuHelper.copyToTarget(tmpFile.absolutePath, zipPath)
-                        writeOk = true
-                    }
-                } catch (e: Exception) {
-                    // 忽略
-                } finally {
-                    tmpFile.delete()
-                }
-            }
+            logs.add("\n===== 三种方案均失败, 导入终止 =====")
+            return ImportResult(success = false, zipName = zipName, logs = logs)
         }
 
-        if (!writeOk) return false
-
         // 更新 plugins.txt
+        logs.add("\n--- 更新 plugins.txt ---")
         val current = readPluginsTxt(context, packageName).toMutableList()
+        logs.add("当前插件数: ${current.size}")
         current.add(zipName)
         val updatedContent = current.joinToString("\n") + "\n"
         val pluginsUri = getPluginsTxtUri(packageName)
         var updated = UriHelper.writeUri(context, pluginsUri, updatedContent)
 
-        if (!updated) {
-            // 尝试文件写入
+        if (updated) {
+            logs.add("✓ ContentUri 写入 plugins.txt 成功")
+        } else {
+            logs.add("✗ ContentUri 写入 plugins.txt 失败, 尝试文件写入")
             val pluginsPath = getPluginsTxtPath(packageName)
             val revisedPath = FileHelper.getRevisePath(pluginsPath)
             try {
                 val file = File(revisedPath ?: pluginsPath)
+                logs.add("plugins.txt 路径: ${file.absolutePath}")
                 file.writeText(updatedContent)
                 updated = true
+                logs.add("✓ 文件写入 plugins.txt 成功")
             } catch (e: Exception) {
+                logs.add("✗ 文件写入失败: ${e::class.java.simpleName}: ${e.message}")
                 if (ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()) {
+                    logs.add("尝试 Shizuku 写入 plugins.txt")
                     val tmpFile = File(context.cacheDir, "plugins_tmp.txt")
                     tmpFile.writeText(updatedContent)
-                    ShizukuHelper.copyToTarget(tmpFile.absolutePath, pluginsPath)
+                    val copyOk = ShizukuHelper.copyToTarget(tmpFile.absolutePath, pluginsPath)
                     tmpFile.delete()
-                    updated = true
+                    updated = copyOk
+                    logs.add("Shizuku 写入 plugins.txt: ${if (copyOk) "成功" else "失败"}")
                 }
             }
         }
 
-        return updated
+        logs.add("\n===== 导入${if (updated) "成功" else "失败"} =====")
+        return ImportResult(success = updated, zipName = zipName, logs = logs)
     }
 }

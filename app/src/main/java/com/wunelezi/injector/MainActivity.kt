@@ -24,6 +24,7 @@ import com.wunelezi.injector.databinding.ActivityMainBinding
 import com.wunelezi.injector.databinding.DialogAppListBinding
 import com.wunelezi.injector.databinding.DialogModuleListBinding
 import com.wunelezi.injector.model.AppInfo
+import com.wunelezi.injector.model.ImportResult
 import com.wunelezi.injector.model.ModuleInfo
 import com.wunelezi.injector.util.PluginManager
 import com.wunelezi.injector.util.ShizukuHelper
@@ -284,16 +285,37 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val ok = PluginManager.importPlugin(this@MainActivity, packageName, uri)
+            val result = PluginManager.importPlugin(this@MainActivity, packageName, uri)
             withContext(Dispatchers.Main) {
-                if (ok) {
+                if (result.success) {
                     Toast.makeText(this@MainActivity, R.string.toast_import_success, Toast.LENGTH_SHORT).show()
                     refreshModuleList(packageName)
                 } else {
-                    Toast.makeText(this@MainActivity, R.string.toast_import_failed, Toast.LENGTH_SHORT).show()
+                    showImportErrorDialog(result)
                 }
             }
         }
+    }
+
+    /**
+     * 显示导入失败详情对话框
+     */
+    private fun showImportErrorDialog(result: ImportResult) {
+        val logsText = result.logs.joinToString("\n")
+        val builder = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_import_failed_title)
+            .setMessage(logsText)
+            .setPositiveButton(R.string.action_confirm, null)
+
+        // 如果可以复制到剪贴板，提供复制按钮
+        builder.setNeutralButton(R.string.action_copy_log) { _, _ ->
+            val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+            val clip = android.content.ClipData.newPlainText("import_error_log", logsText)
+            clipboard?.setPrimaryClip(clip)
+            Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
+        }
+
+        builder.show()
     }
 
     /**

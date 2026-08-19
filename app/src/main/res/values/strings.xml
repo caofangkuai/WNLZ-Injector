@@ -34,4 +34,7 @@
     <string name="action_revoke_permissions">释放所有权限</string>
     <string name="toast_permissions_revoked">已释放所有权限</string>
     <string name="toast_permissions_revoke_failed">释放失败</string>
+    <string name="dialog_import_failed_title">导入失败 - 详细信息</string>
+    <string name="action_copy_log">复制日志</string>
+    <string name="toast_copied">已复制到剪贴板</string>
 </resources>

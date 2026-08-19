@@ -71,6 +71,42 @@ class MainActivity : AppCompatActivity() {
 
         // 初始更新模块摘要
         updateModuleSummary()
+
+        // 启动时自动加载模块数量（静默，不报错）
+        loadModuleSummary()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 从后台恢复时重新加载模块数量（静默，不报错）
+        loadModuleSummary()
+    }
+
+    /**
+     * 静默加载模块数量，更新主页面摘要
+     *
+     * 加载失败或为空时仅显示"未加载模块"，不弹任何错误对话框
+     */
+    private fun loadModuleSummary() {
+        val packageName = binding.etPackageName.text?.toString()?.trim().orEmpty()
+        if (packageName.isEmpty()) {
+            moduleList.clear()
+            updateModuleSummary()
+            return
+        }
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val modules = try {
+                PluginManager.loadModules(this@MainActivity, packageName)
+            } catch (e: Exception) {
+                emptyList<ModuleInfo>()
+            }
+            withContext(Dispatchers.Main) {
+                moduleList.clear()
+                moduleList.addAll(modules)
+                updateModuleSummary()
+            }
+        }
     }
 
     override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {

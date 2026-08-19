@@ -21,6 +21,8 @@ android {
         versionCode 1
         versionName "1.0"
         signingConfig signingConfigs.release
+        // 仅保留简体中文资源，剔除依赖库（appcompat/material 等）中其他语言的字符串
+        resConfigs "zh-rCN"
     }
 
     buildTypes {
@@ -28,7 +30,9 @@ android {
             signingConfig signingConfigs.release
         }
         release {
-            minifyEnabled false
+            // 开启代码压缩与资源精简：仅打包实际用到的 res 资源
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

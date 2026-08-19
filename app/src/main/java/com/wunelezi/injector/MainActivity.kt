@@ -729,6 +729,7 @@ class MainActivity : AppCompatActivity() {
                     // intent1: 指向目标包的 AssistActivity
                     val intent1 = Intent()
                         .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
                     // 构造 extraIntent（携带请求码、appid、for_result、data）
                     val extraIntent = Intent()
@@ -736,6 +737,14 @@ class MainActivity : AppCompatActivity() {
                     extraIntent.putExtra("appid", "1106798370")
                     extraIntent.putExtra("for_result", false)
                     extraIntent.setData(Uri.parse("https://openmobile.qq.com/share?share_id=poc_001"))
+                    // 补上 intent2 所添加的 flags 与 extra
+                    extraIntent.addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK
+                    )
+                    extraIntent.putExtra(STARTANYWHERE_CALLBACK, "true")
 
                     intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", extraIntent)
                     intent1.putExtra("key_extra_pending_intent", pendingIntent)

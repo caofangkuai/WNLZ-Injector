@@ -602,9 +602,9 @@ class MainActivity : AppCompatActivity() {
                     val intent1 = Intent()
                         .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
 
-                    // 构造 ExtraIntent（QQ 分享 Intent）
+                    // 构造 extraIntent（携带请求码、appid、for_result、data）
                     val extraIntent = Intent()
-                    extraIntent.putExtra("key_request_code", 0x2782)
+                    extraIntent.putExtra("key_request_code", 0x1000)
                     extraIntent.putExtra("appid", "1106798370")
                     extraIntent.putExtra("for_result", true)
                     extraIntent.setData(Uri.parse("https://openmobile.qq.com/share?share_id=poc_001"))

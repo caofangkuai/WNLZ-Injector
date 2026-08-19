@@ -39,4 +39,10 @@
     <string name="dialog_load_empty_title">模块列表为空 - 加载详情</string>
     <string name="action_refresh">刷新</string>
     <string name="btn_delete">删除</string>
+    <string name="action_package_version">官包版本号</string>
+    <string name="dialog_version_title">设置自定义官包版本号</string>
+    <string name="dialog_version_hint">版本名称_版本号（留空则自动检测）</string>
+    <string name="dialog_version_empty">留空将使用自动检测版本号</string>
+    <string name="action_auto_detect">自动检测</string>
+    <string name="toast_version_updated">版本号已更新</string>
 </resources>

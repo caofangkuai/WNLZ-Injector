@@ -50,6 +50,12 @@ class MainActivity : AppCompatActivity() {
     /** 加载对话框 */
     private var loadingDialog: Dialog? = null
 
+    /** 自定义官包版本号（格式: versionName_versionCode，空则自动检测） */
+    private var customVersion: String? = null
+
+    /** 自动检测到的版本号（格式: versionName_versionCode） */
+    private var autoDetectedVersion: String? = null
+
     /** SAF 文件选择 launcher */
     private val openFileLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -70,6 +76,21 @@ class MainActivity : AppCompatActivity() {
             showAppListDialog()
             true
         }
+
+        // 包名输入框 —— 文本变化时自动检测版本号
+        binding.etPackageName.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val pkg = s?.toString()?.trim().orEmpty()
+                if (pkg.isEmpty()) {
+                    autoDetectedVersion = null
+                    updateVersionMenuItem()
+                } else {
+                    detectPackageVersion(pkg)
+                }
+            }
+        })
 
         // 注入模块选择卡片 —— 点击弹出模块列表
         binding.cardModules.setOnClickListener { showModuleListDialog() }
@@ -143,11 +164,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
+        // 包名输入框已有内容，立即检测版本号
+        val pkg = binding.etPackageName.text?.toString()?.trim().orEmpty()
+        if (pkg.isNotEmpty()) {
+            detectPackageVersion(pkg)
+        }
         return true
     }
 
     override fun onOptionsItemSelected(item: android.view.MenuItem): Boolean {
         return when (item.itemId) {
+            R.id.action_package_version -> {
+                showVersionEditDialog()
+                true
+            }
             R.id.action_revoke_permissions -> {
                 revokeAllPermissions()
                 true
@@ -477,6 +507,102 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    // ==================== 官包版本号 ====================
+
+    /**
+     * 自动检测包名的版本号，更新 [autoDetectedVersion] 并刷新菜单项
+     */
+    private fun detectPackageVersion(packageName: String) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val version = try {
+                val pm = packageManager
+                val packageInfo = pm.getPackageInfo(packageName, 0)
+                val vName = packageInfo.versionName ?: "unknown"
+                val vCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    packageInfo.longVersionCode.toString()
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageInfo.versionCode.toString()
+                }
+                "${vName}_${vCode}"
+            } catch (e: Exception) {
+                null
+            }
+            withContext(Dispatchers.Main) {
+                autoDetectedVersion = version
+                updateVersionMenuItem()
+            }
+        }
+    }
+
+    /**
+     * 更新菜单项标题，显示当前版本号
+     */
+    private fun updateVersionMenuItem() {
+        // 优先显示自定义版本，否则显示自动检测版本
+        val display = customVersion ?: autoDetectedVersion
+        val menuItem = binding.toolbar.menu?.findItem(R.id.action_package_version)
+        if (menuItem != null) {
+            menuItem.title = if (display != null) {
+                "官包版本号: $display"
+            } else {
+                getString(R.string.action_package_version)
+            }
+        }
+    }
+
+    /**
+     * 弹出版本号编辑对话框
+     */
+    private fun showVersionEditDialog() {
+        val currentDisplay = customVersion ?: autoDetectedVersion ?: ""
+
+        val input = com.google.android.material.textfield.TextInputEditText(this).apply {
+            setText(currentDisplay)
+            hint = getString(R.string.dialog_version_hint)
+            setSelection(length())
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+        }
+
+        val container = com.google.android.material.textfield.TextInputLayout(this).apply {
+            addView(input)
+            hint = getString(R.string.dialog_version_hint)
+            setBoxStrokeColorStateList(
+                android.content.res.ColorStateList.valueOf(
+                    getColor(R.color.primary)
+                )
+            )
+            setPadding(48, 16, 48, 8)
+        }
+
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_version_title)
+            .setView(container)
+            .setPositiveButton(R.string.action_confirm) { _, _ ->
+                val text = input.text?.toString()?.trim().orEmpty()
+                if (text.isEmpty()) {
+                    // 留空 = 使用自动检测
+                    customVersion = null
+                    if (autoDetectedVersion != null) {
+                        Toast.makeText(this, R.string.dialog_version_empty, Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    customVersion = text
+                    Toast.makeText(this, R.string.toast_version_updated, Toast.LENGTH_SHORT).show()
+                }
+                updateVersionMenuItem()
+            }
+            .setNeutralButton(R.string.action_auto_detect) { _, _ ->
+                customVersion = null
+                if (autoDetectedVersion != null) {
+                    Toast.makeText(this, R.string.dialog_version_empty, Toast.LENGTH_SHORT).show()
+                }
+                updateVersionMenuItem()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
     // ==================== 注入按钮逻辑 ====================
 
     private fun onInjectClicked() {
@@ -526,7 +652,9 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // 构造 dex 文件的 content URI
-                val dexUriStr = "content://com.netease.x19.osdkcommon.fileprovider/name/data/data/$targetPackage/app_ntp0/${versionName}_${versionCode}/.unzip/classes.dex"
+                // 使用自定义版本号（如果有），否则使用自动检测的版本号
+                val versionSegment = this@MainActivity.customVersion ?: "${versionName}_${versionCode}"
+                val dexUriStr = "content://com.netease.x19.osdkcommon.fileprovider/name/data/data/$targetPackage/app_ntp0/$versionSegment/.unzip/classes.dex"
                 val dexUri = Uri.parse(dexUriStr)
 
                 // 尝试读取 URI 判断是否有权限

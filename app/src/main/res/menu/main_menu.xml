@@ -2,6 +2,10 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
+        android:id="@+id/action_package_version"
+        android:title="官包版本号"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_revoke_permissions"
         android:title="@string/action_revoke_permissions"
         app:showAsAction="never" />

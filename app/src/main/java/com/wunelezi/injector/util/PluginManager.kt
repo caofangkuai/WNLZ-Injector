@@ -23,7 +23,7 @@ object PluginManager {
 
     /** 获取目标包名的 content URI 前缀（直接使用 files 根目录） */
     fun getBaseContentUri(packageName: String): String {
-        return "content://$packageName.widget_file_provider/widget_external_files/"
+        return "content://com.netease.x19.widget_file_provider/widget_external_files/"
     }
 
     /** plugins.txt 的 content URI */

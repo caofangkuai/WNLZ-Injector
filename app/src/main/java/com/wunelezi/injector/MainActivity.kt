@@ -594,10 +594,36 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 runOnUiThread {
                     hideLoadingDialog()
-                    Toast.makeText(this, "注入失败: ${e.message}", Toast.LENGTH_LONG).show()
+                    showInjectErrorDialog(e)
                 }
             }
         }.start()
+    }
+
+    /**
+     * 显示注入失败错误对话框
+     */
+    private fun showInjectErrorDialog(e: Exception) {
+        val errorMsg = StringBuilder()
+        errorMsg.append("注入失败\n\n")
+        errorMsg.append("异常类型: ${e::class.java.simpleName}\n")
+        errorMsg.append("错误信息: ${e.message}\n\n")
+        errorMsg.append("完整堆栈:\n")
+        e.stackTrace.take(15).forEach { stackTraceElement ->
+            errorMsg.append("  at $stackTraceElement\n")
+        }
+
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("注入失败")
+            .setMessage(errorMsg.toString())
+            .setPositiveButton(R.string.action_confirm, null)
+            .setNeutralButton(R.string.action_copy_log) { _, _ ->
+                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                val clip = android.content.ClipData.newPlainText("inject_error", errorMsg.toString())
+                clipboard?.setPrimaryClip(clip)
+                Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     /**

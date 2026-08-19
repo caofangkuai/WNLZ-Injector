@@ -739,6 +739,7 @@ class MainActivity : AppCompatActivity() {
 
                     intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", extraIntent)
                     intent1.putExtra("key_extra_pending_intent", pendingIntent)
+                    intent1.putExtra("is_login", true)
 
                     runOnUiThread {
                         hideLoadingDialog()

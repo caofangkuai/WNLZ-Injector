@@ -14,7 +14,7 @@ enum class InjectionMethod(
 ) {
     START_ANYWHERE(
         displayName = "StartAnyWhere",
-        description = "利用 PendingIntent 重定向实现任意起点启动"
+        description = "利用 Intent 重定向实现任意起点启动"
     );
 
     /**

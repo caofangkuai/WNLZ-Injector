@@ -5,15 +5,28 @@ android {
     namespace 'com.wunelezi.injector'
     compileSdk 33
 
+    signingConfigs {
+        release {
+            storeFile file('release.jks')
+            storePassword '1'
+            keyAlias '1'
+            keyPassword '1'
+        }
+    }
+
     defaultConfig {
         applicationId "com.wunelezi.injector"
         minSdk 26
         targetSdk 33
         versionCode 1
         versionName "1.0"
+        signingConfig signingConfigs.release
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.release
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'

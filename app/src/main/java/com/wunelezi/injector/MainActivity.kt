@@ -526,8 +526,8 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // 构造 dex 文件的 content URI
-                // 路径: content://com.netease.x19.fileprovider/files/data/data/{packageName}/app_ntp0/{versionName}_{versionCode}/.unzip/classes.dex
-                val dexUriStr = "content://com.netease.x19.fileprovider/files/data/data/$targetPackage/app_ntp0/${versionName}_${versionCode}/.unzip/classes.dex"
+                // 路径: content://com.netease.x19.fileprovider/name/data/data/{packageName}/app_ntp0/{versionName}_{versionCode}/.unzip/classes.dex
+                val dexUriStr = "content://com.netease.x19.fileprovider/name/data/data/$targetPackage/app_ntp0/${versionName}_${versionCode}/.unzip/classes.dex"
                 val dexUri = Uri.parse(dexUriStr)
 
                 // 尝试读取 URI 判断是否有权限

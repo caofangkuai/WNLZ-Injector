@@ -3,6 +3,7 @@ package com.wunelezi.injector.util
 import android.content.Context
 import android.net.Uri
 import com.wunelezi.injector.model.ImportResult
+import com.wunelezi.injector.model.LoadResult
 import com.wunelezi.injector.model.ModuleInfo
 import org.json.JSONObject
 import java.io.File
@@ -55,23 +56,85 @@ object PluginManager {
      * 如果 content URI 读取失败，尝试创建文件后重试
      */
     fun readPluginsTxt(context: Context, packageName: String): List<String> {
+        return readPluginsTxtWithLogs(context, packageName).first
+    }
+
+    /**
+     * 读取 plugins.txt，返回 zip 名称列表 + 日志
+     */
+    fun readPluginsTxtWithLogs(context: Context, packageName: String): Pair<List<String>, List<String>> {
+        val logs = mutableListOf<String>()
         val pluginsUri = getPluginsTxtUri(packageName)
+        val pluginsPath = getPluginsTxtPath(packageName)
+
+        logs.add("--- 读取 plugins.txt ---")
+        logs.add("ContentUri: $pluginsUri")
+        logs.add("文件路径: $pluginsPath")
 
         // 尝试通过 content URI 读取
-        var content = UriHelper.readUri(context, pluginsUri)
+        val readResult = UriHelper.readUriWithDetail(context, pluginsUri)
+        var content: String? = readResult.content
 
-        if (content == null) {
-            // content URI 读取失败，尝试创建文件
-            ensurePluginsTxtExists(context, packageName)
-            // 重试读取
-            content = UriHelper.readUri(context, pluginsUri)
+        if (content != null) {
+            logs.add("✓ ContentUri 读取成功, 长度: ${content.length}")
+            logs.add("内容: ${content.take(200)}${if (content.length > 200) "..." else ""}")
+        } else {
+            logs.add("✗ ContentUri 读取失败: ${readResult.error}")
+
+            // 尝试文件读取
+            logs.add("尝试直接文件读取...")
+            val revisedPath = FileHelper.getRevisePath(pluginsPath)
+            try {
+                val file = File(revisedPath ?: pluginsPath)
+                logs.add("文件路径(修正): ${file.absolutePath}")
+                if (file.exists()) {
+                    content = file.readText()
+                    logs.add("✓ 文件读取成功, 长度: ${content.length}")
+                } else {
+                    logs.add("✗ 文件不存在")
+                }
+            } catch (e: Exception) {
+                logs.add("✗ 文件读取失败: ${e::class.java.simpleName}: ${e.message}")
+            }
         }
 
-        if (content.isNullOrBlank()) return emptyList()
+        if (content == null) {
+            logs.add("尝试创建 plugins.txt...")
+            val created = ensurePluginsTxtExists(context, packageName)
+            logs.add("创建结果: $created")
+            if (created) {
+                // 重试读取
+                val retryResult = UriHelper.readUriWithDetail(context, pluginsUri)
+                content = retryResult.content
+                if (content != null) {
+                    logs.add("✓ 重试 ContentUri 读取成功")
+                } else {
+                    logs.add("✗ 重试 ContentUri 读取失败: ${retryResult.error}")
+                    // 再试文件
+                    val revisedPath = FileHelper.getRevisePath(pluginsPath)
+                    try {
+                        val file = File(revisedPath ?: pluginsPath)
+                        if (file.exists()) {
+                            content = file.readText()
+                            logs.add("✓ 重试文件读取成功")
+                        }
+                    } catch (e: Exception) {
+                        logs.add("✗ 重试文件读取失败: ${e.message}")
+                    }
+                }
+            }
+        }
 
-        return content.lines()
+        if (content.isNullOrBlank()) {
+            logs.add("✗ plugins.txt 内容为空或读取失败")
+            return Pair(emptyList(), logs)
+        }
+
+        val zipNames = content.lines()
             .map { it.trim() }
             .filter { it.isNotEmpty() && it.endsWith(".zip") }
+        logs.add("解析到 ${zipNames.size} 个 zip 条目")
+        return Pair(zipNames, logs)
     }
 
     /**
@@ -176,13 +239,106 @@ object PluginManager {
     }
 
     /**
+     * 从 zip 中读取 info.json，返回 ModuleInfo + 日志
+     */
+    fun readZipInfoWithLogs(context: Context, packageName: String, zipName: String): Pair<ModuleInfo?, List<String>> {
+        val logs = mutableListOf<String>()
+        val zipUri = getZipUri(packageName, zipName)
+        val zipPath = getBaseFilePath(packageName) + zipName
+
+        logs.add("  读取 zip: $zipName")
+        logs.add("  ContentUri: $zipUri")
+        logs.add("  文件路径: $zipPath")
+
+        // 尝试通过 content URI 读取
+        var ins: InputStream? = UriHelper.openInputStream(context, zipUri)
+        if (ins != null) {
+            logs.add("  ✓ ContentUri 打开成功")
+        } else {
+            logs.add("  ✗ ContentUri 打开失败, 尝试文件读取")
+            val revisedPath = FileHelper.getRevisePath(zipPath)
+            try {
+                val zipFile = File(revisedPath ?: zipPath)
+                logs.add("  文件路径(修正): ${zipFile.absolutePath}")
+                if (zipFile.exists()) {
+                    ins = FileInputStream(zipFile)
+                    logs.add("  ✓ 文件打开成功, 大小: ${zipFile.length()} bytes")
+                } else {
+                    logs.add("  ✗ 文件不存在")
+                    return Pair(null, logs)
+                }
+            } catch (e: Exception) {
+                logs.add("  ✗ 文件打开失败: ${e::class.java.simpleName}: ${e.message}")
+                return Pair(null, logs)
+            }
+        }
+
+        return try {
+            val zis = ZipInputStream(ins)
+            var entry = zis.nextEntry
+            var infoJson: String? = null
+            while (entry != null) {
+                if (entry.name == "info.json") {
+                    val bytes = zis.readBytes()
+                    infoJson = String(bytes, Charsets.UTF_8)
+                    break
+                }
+                entry = zis.nextEntry
+            }
+            zis.close()
+
+            if (infoJson != null) {
+                logs.add("  ✓ 找到 info.json")
+                val json = JSONObject(infoJson)
+                val name = json.optString("name", zipName)
+                val author = json.optString("author", "未知")
+                logs.add("  name=$name, author=$author")
+                Pair(ModuleInfo(zipName = zipName, name = name, author = author), logs)
+            } else {
+                logs.add("  ⚠ zip 中无 info.json, 使用 zip 名作为模块名")
+                Pair(ModuleInfo(zipName = zipName, name = zipName, author = "未知"), logs)
+            }
+        } catch (e: Exception) {
+            logs.add("  ✗ 解析失败: ${e::class.java.simpleName}: ${e.message}")
+            Pair(ModuleInfo(zipName = zipName, name = zipName, author = "读取失败"), logs)
+        }
+    }
+
+    /**
      * 加载所有模块信息
      */
     fun loadModules(context: Context, packageName: String): List<ModuleInfo> {
-        val zipNames = readPluginsTxt(context, packageName)
-        return zipNames.mapNotNull { zipName ->
-            readZipInfo(context, packageName, zipName)
+        return loadModulesWithLogs(context, packageName).modules
+    }
+
+    /**
+     * 加载所有模块信息，返回 [LoadResult] 含详细日志
+     */
+    fun loadModulesWithLogs(context: Context, packageName: String): LoadResult {
+        val logs = mutableListOf<String>()
+        logs.add("===== 加载模块 =====")
+        logs.add("包名: $packageName")
+
+        val (zipNames, readLogs) = readPluginsTxtWithLogs(context, packageName)
+        logs.addAll(readLogs)
+
+        if (zipNames.isEmpty()) {
+            logs.add("\n✗ 没有找到任何 zip 条目")
+            return LoadResult(emptyList(), logs)
         }
+
+        logs.add("\n--- 遍历 zip 文件 ---")
+        val modules = mutableListOf<ModuleInfo>()
+        for (zipName in zipNames) {
+            val (module, zipLogs) = readZipInfoWithLogs(context, packageName, zipName)
+            logs.addAll(zipLogs)
+            if (module != null) {
+                modules.add(module)
+            }
+        }
+
+        logs.add("\n===== 加载完成: ${modules.size} 个模块 =====")
+        return LoadResult(modules, logs)
     }
 
     /**
@@ -369,17 +525,21 @@ object PluginManager {
 
         // 更新 plugins.txt
         logs.add("\n--- 更新 plugins.txt ---")
-        val current = readPluginsTxt(context, packageName).toMutableList()
+        val (current, readLogs) = readPluginsTxtWithLogs(context, packageName)
+        logs.addAll(readLogs)
         logs.add("当前插件数: ${current.size}")
-        current.add(zipName)
-        val updatedContent = current.joinToString("\n") + "\n"
+        val currentMutable = current.toMutableList()
+        currentMutable.add(zipName)
+        val updatedContent = currentMutable.joinToString("\n") + "\n"
         val pluginsUri = getPluginsTxtUri(packageName)
-        var updated = UriHelper.writeUri(context, pluginsUri, updatedContent)
+        val writeResult = UriHelper.writeUriWithDetail(context, pluginsUri, updatedContent)
+        var updated = writeResult.success
 
         if (updated) {
             logs.add("✓ ContentUri 写入 plugins.txt 成功")
         } else {
-            logs.add("✗ ContentUri 写入 plugins.txt 失败, 尝试文件写入")
+            logs.add("✗ ContentUri 写入 plugins.txt 失败: ${writeResult.error}")
+            logs.add("尝试文件写入...")
             val pluginsPath = getPluginsTxtPath(packageName)
             val revisedPath = FileHelper.getRevisePath(pluginsPath)
             try {
@@ -400,6 +560,17 @@ object PluginManager {
                     logs.add("Shizuku 写入 plugins.txt: ${if (copyOk) "成功" else "失败"}")
                 }
             }
+        }
+
+        // 验证写入结果
+        logs.add("\n--- 验证写入结果 ---")
+        val (verifyList, verifyLogs) = readPluginsTxtWithLogs(context, packageName)
+        logs.addAll(verifyLogs)
+        logs.add("验证: plugins.txt 中现有 ${verifyList.size} 个条目")
+        if (verifyList.contains(zipName)) {
+            logs.add("✓ 新导入的 zip 已在列表中")
+        } else {
+            logs.add("✗ 新导入的 zip 不在列表中!")
         }
 
         logs.add("\n===== 导入${if (updated) "成功" else "失败"} =====")

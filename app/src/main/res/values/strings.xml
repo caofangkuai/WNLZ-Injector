@@ -44,4 +44,7 @@
     <string name="toast_all_files_unsupported">当前设备不支持所有文件访问权限</string>
     <string name="toast_shizuku_granted">Shizuku 权限已授予</string>
     <string name="toast_shizuku_denied">Shizuku 权限被拒绝</string>
+    <string name="dialog_import_success_title">导入成功 - 详细信息</string>
+    <string name="dialog_load_empty_title">模块列表为空 - 加载详情</string>
+    <string name="action_refresh">刷新</string>
 </resources>

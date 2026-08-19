@@ -29,6 +29,7 @@ import com.wunelezi.injector.databinding.DialogAppListBinding
 import com.wunelezi.injector.databinding.DialogModuleListBinding
 import com.wunelezi.injector.model.AppInfo
 import com.wunelezi.injector.model.ImportResult
+import com.wunelezi.injector.model.LoadResult
 import com.wunelezi.injector.model.ModuleInfo
 import com.wunelezi.injector.util.PluginManager
 import com.wunelezi.injector.util.ShizukuHelper
@@ -385,14 +386,16 @@ class MainActivity : AppCompatActivity() {
         // 加载模块
         dialogBinding.progressBar.visibility = android.view.View.VISIBLE
         lifecycleScope.launch(Dispatchers.IO) {
-            val modules = PluginManager.loadModules(this@MainActivity, packageName)
+            val loadResult = PluginManager.loadModulesWithLogs(this@MainActivity, packageName)
             withContext(Dispatchers.Main) {
                 dialogBinding.progressBar.visibility = android.view.View.GONE
                 moduleList.clear()
-                moduleList.addAll(modules)
+                moduleList.addAll(loadResult.modules)
                 moduleAdapter?.notifyDataSetChanged()
-                if (modules.isEmpty()) {
+                if (loadResult.modules.isEmpty()) {
                     dialogBinding.tvEmpty.visibility = android.view.View.VISIBLE
+                    // 列表为空时展示加载详情
+                    showLoadErrorDialog(loadResult)
                 }
             }
         }
@@ -412,13 +415,34 @@ class MainActivity : AppCompatActivity() {
             val result = PluginManager.importPlugin(this@MainActivity, packageName, uri)
             withContext(Dispatchers.Main) {
                 if (result.success) {
-                    Toast.makeText(this@MainActivity, R.string.toast_import_success, Toast.LENGTH_SHORT).show()
-                    refreshModuleList(packageName)
+                    // 导入成功也展示详情, 方便用户确认
+                    showImportResultDialog(result, packageName)
                 } else {
                     showImportErrorDialog(result)
                 }
             }
         }
+    }
+
+    /**
+     * 显示导入成功详情对话框（含刷新列表）
+     */
+    private fun showImportResultDialog(result: ImportResult, packageName: String) {
+        val logsText = result.logs.joinToString("\n")
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_import_success_title)
+            .setMessage(logsText)
+            .setPositiveButton(R.string.action_refresh) { _, _ ->
+                refreshModuleList(packageName)
+            }
+            .setNeutralButton(R.string.action_copy_log) { _, _ ->
+                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                val clip = android.content.ClipData.newPlainText("import_log", logsText)
+                clipboard?.setPrimaryClip(clip)
+                Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
     }
 
     /**
@@ -443,16 +467,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * 显示模块加载详情对话框（列表为空时调用）
+     */
+    private fun showLoadErrorDialog(result: LoadResult) {
+        val logsText = result.logs.joinToString("\n")
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dialog_load_empty_title)
+            .setMessage(logsText)
+            .setPositiveButton(R.string.action_confirm, null)
+            .setNeutralButton(R.string.action_copy_log) { _, _ ->
+                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                val clip = android.content.ClipData.newPlainText("load_log", logsText)
+                clipboard?.setPrimaryClip(clip)
+                Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    /**
      * 刷新模块列表
      */
     private fun refreshModuleList(packageName: String) {
         lifecycleScope.launch(Dispatchers.IO) {
-            val modules = PluginManager.loadModules(this@MainActivity, packageName)
+            val loadResult = PluginManager.loadModulesWithLogs(this@MainActivity, packageName)
             withContext(Dispatchers.Main) {
                 moduleList.clear()
-                moduleList.addAll(modules)
+                moduleList.addAll(loadResult.modules)
                 moduleAdapter?.notifyDataSetChanged()
                 updateModuleSummary()
+                if (loadResult.modules.isEmpty()) {
+                    // 刷新后仍为空, 展示详情
+                    showLoadErrorDialog(loadResult)
+                }
             }
         }
     }

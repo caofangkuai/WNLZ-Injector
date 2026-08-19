@@ -686,7 +686,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     // 无权限，通过 AssistActivity + PendingIntent 授权
-                    // intent2: 指向本应用 MainActivity，携带 dex URI
+                    // intent2: 指向 Android 系统设置主页，携带 dex URI
 
                     // 先获取 MIME type，捕获 getType 的错误
                     var mimeType: String? = null
@@ -710,7 +710,7 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val intent2 = Intent()
-                        .setComponent(ComponentName("com.wunelezi.injector", "com.wunelezi.injector.MainActivity"))
+                        .setComponent(ComponentName("com.android.settings", "com.android.settings.Settings"))
                         .setDataAndType(dexUri, mimeType)
                         .addFlags(
                             Intent.FLAG_GRANT_READ_URI_PERMISSION or

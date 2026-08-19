@@ -560,9 +560,31 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     // 无权限，通过 AssistActivity + PendingIntent 授权
                     // intent2: 指向本应用 MainActivity，携带 dex URI
+
+                    // 先获取 MIME type，捕获 getType 的错误
+                    var mimeType: String? = null
+                    try {
+                        mimeType = contentResolver.getType(dexUri)
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            hideLoadingDialog()
+                            showInjectErrorDialog(e)
+                        }
+                        return@Thread
+                    }
+
+                    if (mimeType == null) {
+                        runOnUiThread {
+                            hideLoadingDialog()
+                            val err = Exception("Failed to get type for: $dexUriStr\n\nContentResolver.getType() 返回 null，目标 URI 可能不存在或无权访问。")
+                            showInjectErrorDialog(err)
+                        }
+                        return@Thread
+                    }
+
                     val intent2 = Intent()
                         .setComponent(ComponentName("com.wunelezi.injector", "com.wunelezi.injector.MainActivity"))
-                        .setDataAndType(dexUri, contentResolver.getType(dexUri))
+                        .setDataAndType(dexUri, mimeType)
                         .addFlags(
                             Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or

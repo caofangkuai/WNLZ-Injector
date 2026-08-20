@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    AssistActivity 的"背景滚动 TextView"布局：
+    - 整个 Activity 的窗口就是一个大 TextView，外面包 ScrollView 用于滚动查看
+    - 实时显示 logcat 子进程的 stdout 流
+    - 同时还承接 Activity 内部原本写在 logDialog / showErrorDialog 中的日志与异常
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/scrollViewAssistBg"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:scrollbars="vertical"
+    android:background="#101418">
+
+    <TextView
+        android:id="@+id/tvAssistBg"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="12dp"
+        android:textIsSelectable="true"
+        android:textSize="11sp"
+        android:fontFamily="monospace"
+        android:textColor="#A9B7C6"
+        android:gravity="top|start"
+        android:lineSpacingExtra="2dp" />
+</ScrollView>

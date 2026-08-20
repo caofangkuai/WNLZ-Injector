@@ -4,8 +4,6 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -19,9 +17,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.text.TextUtils;
-import android.view.LayoutInflater;
 import android.view.View;
-import android.widget.Button;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -35,15 +31,22 @@ import com.wunelezi.injector.tencent.tauth.UIListenerManager;
 import com.wunelezi.injector.tencent.open.utils.m;
 import org.json.JSONObject;
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileWriter;
 import java.io.InputStreamReader;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * AssistActivity：
+ *  - 窗口本体内有一个全屏滚动 TextView，作为「实时 logcat 输出窗口」+ 「本 Activity 内部日志」；
+ *  - 历史上曾经用 AlertDialog 把每条日志 / 异常都弹一遍；现在这些日志 / 异常全部删掉弹窗，
+ *    直接追加到背景 TextView；
+ *  - 仅保留「Intent 详情对话框」一处 AlertDialog：doOnCreate 中转发 PendingIntent 前，
+ *    会先弹一个 AlertDialog 把即将执行的 Intent / PendingIntent 关键信息呈现给用户确认。
+ */
 public class AssistActivity extends Activity {
     public static final String EXTRA_INTENT = "openSDK_LOG.AssistActivity.ExtraIntent";
     public static final String KEY_EXTRA_PENDING_INTENT = "key_extra_pending_intent";
     public static final String KEY_REQUEST_ORIENTATION = "key_request_orientation";
+
     private String d;
     private QQStayReceiver e;
     private boolean f;
@@ -54,579 +57,184 @@ public class AssistActivity extends Activity {
         public void handleMessage(Message message) {
             try {
                 if (message.what == 0 && !AssistActivity.this.isFinishing()) {
-                    logDialog("openSDK_LOG.AssistActivity", "-->finish by timeout");
+                    logToBg("openSDK_LOG.AssistActivity", "-->finish by timeout");
                     AssistActivity.this.promptFinish("超时触发 finish（timeout）");
                 }
             } catch (Throwable t) {
-                showErrorDialog("Handler.handleMessage 异常", t);
+                appendBgError("Handler.handleMessage 异常", t);
             }
         }
     };
+
+    /** 背景滚动 TextView + ScrollView，本 Activity 的"实时日志窗"主体 */
+    private TextView tvBg;
+    private ScrollView scrollBg;
+
+    /** logcat 子进程控制 */
+    private Process logcatProc;
+    private Thread logcatReader;
+    private final AtomicBoolean logcatRunning = new AtomicBoolean(false);
 
     public static Intent getAssistActivityIntent(Context context) {
         return new Intent(context, (Class<?>) AssistActivity.class);
     }
 
-    // ==================== 工具方法 ====================
+    // ==================== 背景 TextView 工具方法 ====================
 
     /**
-     * 把文本复制到剪贴板，并弹 Toast 提示。
+     * 把一行情本追加到背景 TextView；新行靠底部，自动滚动到底部。
+     * Activity 已销毁则直接丢弃。
      */
-    private void copyToClipboard(String label, String text) {
-        try {
-            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText(label == null ? "text" : label,
-                        text == null ? "" : text));
-                Toast.makeText(this, "已复制到剪贴板", Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(this, "剪贴板服务不可用", Toast.LENGTH_SHORT).show();
-            }
-        } catch (Throwable t) {
-            showErrorDialog("复制失败", t);
-        }
-    }
-
-    /**
-     * 把原本的日志输出改成弹窗展示；同时保留 logcat 输出，方便调试。
-     * 使用可滚动 + 长按可复制 / 可点「查看 logcat」的布局。
-     */
-    private void logDialog(final String tag, final String msg) {
-        SLog.i(tag, msg);
-        if (isFinishing() || isDestroyed()) {
-            return;
-        }
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (isFinishing() || isDestroyed()) {
-                    return;
-                }
-                String content = "[" + tag + "]\n" + (msg == null ? "" : msg);
-                showScrollableTextDialog(tag, content);
-            }
-        });
-    }
-
-    /**
-     * 通用异常弹窗：无论哪个方法里抛了 Throwable，都尽量用 dialog 反馈，
-     * 避免崩溃导致 StartAnyWhere 流程中断后用户毫无线索。
-     * 走可滚动 + 长按可复制布局。
-     */
-    private void showErrorDialog(final String title, final Throwable t) {
-        if (t == null) return;
-        SLog.e(title, "AssistActivity 捕获异常", t);
-        if (isFinishing() || isDestroyed()) {
-            return;
-        }
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (isFinishing() || isDestroyed()) {
-                    return;
-                }
-                StringBuilder sb = new StringBuilder();
-                sb.append("异常类型: ").append(t.getClass().getSimpleName()).append("\n");
-                sb.append("错误信息: ").append(t.getMessage()).append("\n\n");
-                sb.append("堆栈:\n");
-                StackTraceElement[] stack = t.getStackTrace();
-                int n = Math.min(20, stack == null ? 0 : stack.length);
-                for (int i = 0; i < n; i++) {
-                    sb.append("  at ").append(stack[i]).append("\n");
-                }
-                showScrollableTextDialog(title, sb.toString());
-            }
-        });
-    }
-
-    /** Throwable 异常的弹窗便捷方法，message 为可选说明 */
-    private void showErrorDialog(final String title, final String message, final Throwable t) {
-        if (t == null) return;
-        SLog.e(title, message, t);
-        if (isFinishing() || isDestroyed()) {
-            return;
-        }
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (isFinishing() || isDestroyed()) {
-                    return;
-                }
-                StringBuilder sb = new StringBuilder();
-                if (message != null && !message.isEmpty()) {
-                    sb.append(message).append("\n\n");
-                }
-                sb.append("异常类型: ").append(t.getClass().getSimpleName()).append("\n");
-                sb.append("错误信息: ").append(t.getMessage()).append("\n\n");
-                sb.append("堆栈:\n");
-                StackTraceElement[] stack = t.getStackTrace();
-                int n = Math.min(20, stack == null ? 0 : stack.length);
-                for (int i = 0; i < n; i++) {
-                    sb.append("  at ").append(stack[i]).append("\n");
-                }
-                showScrollableTextDialog(title, sb.toString());
-            }
-        });
-    }
-
-    /**
-     * 不再主动 finish()，改为弹出提示，由用户点"确认关闭"才真正结束 Activity。
-     * 走可滚动 + 长按可复制布局。
-     */
-    private void promptFinish(final String reason) {
-        if (isFinishing() || isDestroyed()) {
-            return;
-        }
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (isFinishing() || isDestroyed()) {
-                    return;
-                }
-                showScrollableTextDialog("finish() 被调用（点确认关闭后才真正结束）", reason);
-            }
-        });
-    }
-
-    /**
-     * 通用「可滚动 + 长按可复制 + 可跳到 logcat」的弹窗。
-     * 关闭按钮会真正 finish() 当前 Activity。
-     */
-    private void showScrollableTextDialog(final String title, final String content) {
-        if (isFinishing() || isDestroyed()) {
-            return;
-        }
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (isFinishing() || isDestroyed()) {
-                    return;
-                }
-                final View view;
-                try {
-                    view = LayoutInflater.from(AssistActivity.this)
-                            .inflate(R.layout.dialog_scroll_text, null);
-                } catch (Throwable t) {
-                    showErrorDialog2(title, content, t);
-                    return;
-                }
-                final TextView tv = (TextView) view.findViewById(R.id.tvContent);
-                Button btnCopy = (Button) view.findViewById(R.id.btnCopy);
-                Button btnLogcat = (Button) view.findViewById(R.id.btnLogcat);
-                tv.setText(content == null ? "" : content);
-                tv.setOnLongClickListener(new View.OnLongClickListener() {
-                    @Override
-                    public boolean onLongClick(View v) {
-                        copyToClipboard(title, tv.getText().toString());
-                        return true;
-                    }
-                });
-                btnCopy.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        copyToClipboard(title, tv.getText().toString());
-                    }
-                });
-                final AlertDialog dialog = new AlertDialog.Builder(AssistActivity.this)
-                        .setTitle(title)
-                        .setView(view)
-                        .setCancelable(true)
-                        .setPositiveButton("确认关闭", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface d, int which) {
-                                AssistActivity.this.finish();
-                            }
-                        })
-                        .create();
-                btnLogcat.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        try { dialog.dismiss(); } catch (Throwable ignored) {}
-                        showLogcatDialog();
-                    }
-                });
-                dialog.show();
-            }
-        });
-    }
-
-    /**
-     * 当自定义布局加载失败时的 fallback（直接用 setMessage）。
-     */
-    private void showErrorDialog2(String title, String content, Throwable t) {
+    private void appendBgLine(final String line) {
         if (isFinishing() || isDestroyed()) return;
+        if (tvBg == null) return;
+        final String text = (line == null ? "" : line) + "\n";
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            appendBgLineNow(text);
+        } else {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    if (isFinishing() || isDestroyed() || tvBg == null) return;
+                    appendBgLineNow(text);
+                }
+            });
+        }
+    }
+
+    private void appendBgLineNow(String text) {
         try {
-            new AlertDialog.Builder(this)
-                    .setTitle(title)
-                    .setMessage(content + "\n\n[showScrollableTextDialog 异常: " + t + "]")
-                    .setCancelable(true)
-                    .setPositiveButton("确认关闭", new DialogInterface.OnClickListener() {
-                        @Override
-                        public void onClick(DialogInterface d, int which) {
-                            finish();
-                        }
-                    })
-                    .show();
+            // 全量 logcat 输出量巨大，超 MAX_BG_CHARS 时裁掉前半段（按行），保留最新
+            CharSequence cur = tvBg.getText();
+            if (cur != null && cur.length() + text.length() > MAX_BG_CHARS) {
+                int oversize = (cur.length() + text.length()) - MAX_BG_CHARS;
+                int targetLen = cur.length() - oversize;
+                if (targetLen < 0) targetLen = 0;
+                // 在 targetLen 之后找一个换行边界（避免把一行切成两半）
+                int cutFrom = targetLen;
+                int nextNl = -1;
+                int maxScan = Math.min(cur.length(), targetLen + 4096);
+                for (int i = targetLen; i < maxScan; i++) {
+                    if (cur.charAt(i) == '\n') {
+                        nextNl = i;
+                        break;
+                    }
+                }
+                if (nextNl > 0 && nextNl + 1 < cur.length()) {
+                    cutFrom = nextNl + 1;
+                }
+                // 触发一次"截断提示"插入到内容前面
+                String notice = "[已自动截断 " + (cutFrom) + " 字符旧日志]\n";
+                tvBg.setText(notice + cur.subSequence(cutFrom, cur.length()));
+            }
+            tvBg.append(text);
+            if (scrollBg != null) {
+                scrollBg.post(new Runnable() {
+                    @Override public void run() {
+                        try {
+                            scrollBg.fullScroll(View.FOCUS_DOWN);
+                        } catch (Throwable ignored) {}
+                    }
+                });
+            }
         } catch (Throwable ignored) {}
     }
 
     /**
-     * 在 startIntentSender / startIntentSenderForResult 执行前弹 dialog，
-     * 展示即将发起的 Intent / PendingIntent 详情，由用户点"执行"或"取消"。
-     * 走可滚动 + 长按可复制布局。
+     * 写一条带前缀的日志：[tag] msg
      */
-    private void showIntentDetailsDialog(final Intent intent, final PendingIntent pendingIntent,
-                                         final Runnable onConfirm, final Runnable onCancel) {
-        if (isFinishing() || isDestroyed()) {
-            return;
-        }
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (isFinishing() || isDestroyed()) {
-                    return;
-                }
-                final String details = describeIntent(intent, pendingIntent);
-                final View view;
-                try {
-                    view = LayoutInflater.from(AssistActivity.this)
-                            .inflate(R.layout.dialog_scroll_text, null);
-                } catch (Throwable t) {
-                    new AlertDialog.Builder(AssistActivity.this)
-                            .setTitle("Intent 详情（即将执行）")
-                            .setMessage(details)
-                            .setCancelable(false)
-                            .setPositiveButton("执行", new DialogInterface.OnClickListener() {
-                                @Override public void onClick(DialogInterface d, int w) {
-                                    if (onConfirm != null) onConfirm.run();
-                                }
-                            })
-                            .setNegativeButton("取消", new DialogInterface.OnClickListener() {
-                                @Override public void onClick(DialogInterface d, int w) {
-                                    if (onCancel != null) onCancel.run();
-                                }
-                            })
-                            .show();
-                    return;
-                }
-                final TextView tv = (TextView) view.findViewById(R.id.tvContent);
-                Button btnCopy = (Button) view.findViewById(R.id.btnCopy);
-                Button btnLogcat = (Button) view.findViewById(R.id.btnLogcat);
-                tv.setText(details);
-                tv.setOnLongClickListener(new View.OnLongClickListener() {
-                    @Override
-                    public boolean onLongClick(View v) {
-                        copyToClipboard("intent_details", tv.getText().toString());
-                        return true;
-                    }
-                });
-                btnCopy.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        copyToClipboard("intent_details", tv.getText().toString());
-                    }
-                });
-                final AlertDialog dialog = new AlertDialog.Builder(AssistActivity.this)
-                        .setTitle("Intent 详情（即将执行）")
-                        .setView(view)
-                        .setCancelable(false)
-                        .setPositiveButton("执行", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface d, int which) {
-                                if (onConfirm != null) onConfirm.run();
-                            }
-                        })
-                        .setNegativeButton("取消", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface d, int which) {
-                                if (onCancel != null) onCancel.run();
-                            }
-                        })
-                        .create();
-                btnLogcat.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        try { dialog.dismiss(); } catch (Throwable ignored) {}
-                        showLogcatDialog();
-                    }
-                });
-                dialog.show();
-            }
-        });
+    private void logToBg(String tag, String msg) {
+        try { SLog.i(tag, msg); } catch (Throwable ignored) {}
+        appendBgLine("[" + (tag == null ? "" : tag) + "] " + (msg == null ? "" : msg));
     }
 
     /**
-     * 把 Intent 的关键字段（Component / Action / Data / Type / Categories / Extras / Flags）
-     * 以及 PendingIntent 的 creatorPackage、flags 格式化成可读文本。
+     * 把异常追加到背景 TextView（不再弹窗）。
      */
-    private String describeIntent(Intent intent, PendingIntent pendingIntent) {
-        StringBuilder sb = new StringBuilder();
-        if (intent == null) {
-            sb.append("intent == null\n");
-        } else {
-            ComponentName cn = intent.getComponent();
-            sb.append("Component: ").append(cn != null ? cn.flattenToString() : "(无)").append("\n");
-            if (intent.getAction() != null) {
-                sb.append("Action: ").append(intent.getAction()).append("\n");
-            }
-            Uri data = intent.getData();
-            if (data != null) {
-                sb.append("Data: ").append(data.toString()).append("\n");
-            }
-            String type = intent.getType();
-            if (type != null) {
-                sb.append("Type: ").append(type).append("\n");
-            }
-            if (intent.getCategories() != null && !intent.getCategories().isEmpty()) {
-                sb.append("Categories: ").append(intent.getCategories()).append("\n");
-            }
-            Bundle extras = intent.getExtras();
-            if (extras != null && !extras.isEmpty()) {
-                sb.append("\nExtras:\n");
-                for (String key : extras.keySet()) {
-                    Object v;
-                    try {
-                        v = extras.get(key);
-                    } catch (Throwable t) {
-                        v = "(get 异常: " + t.getMessage() + ")";
-                    }
-                    sb.append("  ").append(key).append(" = ");
-                    if (v == null) {
-                        sb.append("null\n");
-                    } else if (v instanceof Intent) {
-                        sb.append("(Intent) ").append(((Intent) v).toString()).append("\n");
-                    } else if (v instanceof Bundle) {
-                        sb.append("(Bundle) ").append(((Bundle) v).toString()).append("\n");
-                    } else if (v instanceof Uri) {
-                        sb.append(v.toString()).append("\n");
-                    } else if (v instanceof String[]) {
-                        sb.append(java.util.Arrays.toString((String[]) v)).append("\n");
-                    } else if (v instanceof boolean[]) {
-                        sb.append(java.util.Arrays.toString((boolean[]) v)).append("\n");
-                    } else if (v instanceof int[]) {
-                        sb.append(java.util.Arrays.toString((int[]) v)).append("\n");
-                    } else if (v instanceof long[]) {
-                        sb.append(java.util.Arrays.toString((long[]) v)).append("\n");
-                    } else if (v instanceof double[]) {
-                        sb.append(java.util.Arrays.toString((double[]) v)).append("\n");
-                    } else {
-                        sb.append(v.toString()).append("\n");
-                    }
-                }
-            }
-            sb.append("\nFlags: 0x").append(Integer.toHexString(intent.getFlags()));
+    private void appendBgError(final String title, final Throwable t) {
+        if (t == null) return;
+        try { SLog.e(title, "AssistActivity 捕获异常", t); } catch (Throwable ignored) {}
+        final StringBuilder sb = new StringBuilder();
+        sb.append("[ERR ").append(title == null ? "" : title).append("] ");
+        sb.append(t.getClass().getSimpleName()).append(": ").append(t.getMessage()).append("\n");
+        StackTraceElement[] stack = t.getStackTrace();
+        int n = Math.min(20, stack == null ? 0 : stack.length);
+        for (int i = 0; i < n; i++) {
+            sb.append("  at ").append(stack[i]).append("\n");
         }
-        if (pendingIntent != null) {
-            sb.append("\n\nPendingIntent:\n");
-            try {
-                sb.append("  creatorPackage: ").append(pendingIntent.getCreatorPackage()).append("\n");
-            } catch (Throwable ignored) {
-                sb.append("  creatorPackage: (获取失败)\n");
-            }
-            try {
-                sb.append("  creatorUid: ").append(pendingIntent.getCreatorUid()).append("\n");
-            } catch (Throwable ignored) {
-                sb.append("  creatorUid: (获取失败)\n");
-            }
-            sb.append("  isActivity: ").append(pendingIntent.isActivity()).append("\n");
-            sb.append("  isBroadcast: ").append(pendingIntent.isBroadcast()).append("\n");
-            sb.append("  isService: ").append(pendingIntent.isService()).append("\n");
-        }
-        return sb.toString();
+        appendBgLine(sb.toString());
     }
 
-    // ==================== Logcat 实时抓取 ====================
+    /**
+     * 替代原本的"提示用户 finish"——现在直接写一行日志就 finish。
+     */
+    private void promptFinish(final String reason) {
+        if (isFinishing() || isDestroyed()) return;
+        appendBgLine("[FINISH] " + (reason == null ? "" : reason));
+        finish();
+    }
+
+    // ==================== logcat 子进程 ====================
 
     /**
-     * 弹出「Logcat 输出」dialog：后台执行 logcat 子进程，捕获 stdout 实时追加。
-     * - 启动 / 停止：toggle 按钮
-     * - 清屏：清空 TextView
-     * - 复制：把 TextView 当前全部内容写入剪贴板
-     * - 保存文件：把 TextView 当前内容写到 app 外部文件目录
-     * - 关闭 dialog 时自动 stop & destroy 进程
+     * 启动后台 logcat 实时抓取；输出全部追加到背景 TextView 上。
+     * - 多次调用是幂等的：第一次成功后就忽略后续调用。
+     * - onDestroy 时会自动 stop。
+     *
+     * [全量抓取] 不使用任何 tag 过滤：
+     *   * logcat -b all  - 同时抓 main / system / events / crash / radio 五个 buffer
+     *   * -v threadtime - 输出格式：time pid tid priority tag message（每条带时间/线程）
+     *   * 不加 filter 等价于 "ALL:V"，相当于把 *:S 拿掉，让所有 tag 都放出来
+     *
+     * [防止 OOM] 配合 {@link #appendBgLineNow} 的"超长截断"策略，避免 TextView 撑爆：
+     *   * TextView 总内容上限 MAX_BG_CHARS（300 KB），
+     *   * 超过就裁掉前半段（保留最新），且裁剪点必须在换行边界
      */
-    private void showLogcatDialog() {
-        if (isFinishing() || isDestroyed()) {
+    private static final int MAX_BG_CHARS = 300 * 1024;
+
+    private void startBgLogcat() {
+        if (logcatRunning.get()) return;
+        try {
+            // 不传 filter = 显示所有 tag；-b all 让 system/crash 等 buffer 也抓
+            logcatProc = Runtime.getRuntime().exec(
+                    new String[]{"logcat", "-b", "all", "-v", "threadtime"});
+        } catch (Throwable t) {
+            appendBgError("logcat 启动失败", t);
             return;
         }
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                if (isFinishing() || isDestroyed()) {
-                    return;
-                }
-                final View view;
+        logcatRunning.set(true);
+        logcatReader = new Thread(new Runnable() {
+            @Override public void run() {
+                BufferedReader br = null;
                 try {
-                    view = LayoutInflater.from(AssistActivity.this)
-                            .inflate(R.layout.dialog_logcat, null);
+                    br = new BufferedReader(new InputStreamReader(logcatProc.getInputStream()));
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        if (!logcatRunning.get()) break;
+                        // logcat 单行可能很长（堆栈链路），再粗略截断避免异常巨大行阻塞主线程
+                        if (line.length() > 8192) {
+                            line = line.substring(0, 8192) + "...[截断]";
+                        }
+                        appendBgLine(line);
+                    }
                 } catch (Throwable t) {
-                    new AlertDialog.Builder(AssistActivity.this)
-                            .setTitle("Logcat 输出")
-                            .setMessage("无法加载 dialog_logcat.xml: " + t)
-                            .setPositiveButton("关闭", null)
-                            .show();
-                    return;
+                    appendBgError("logcat reader 异常", t);
+                } finally {
+                    if (br != null) try { br.close(); } catch (Throwable ignored) {}
                 }
-                final TextView tv = (TextView) view.findViewById(R.id.tvLogcat);
-                final ScrollView scroll = (ScrollView) view.findViewById(R.id.scrollViewLogcat);
-                final Button btnToggle = (Button) view.findViewById(R.id.btnToggleLogcat);
-                final Button btnClear = (Button) view.findViewById(R.id.btnClearLogcat);
-                final Button btnCopy = (Button) view.findViewById(R.id.btnCopyLogcat);
-                final Button btnExport = (Button) view.findViewById(R.id.btnExportLogcat);
-
-                tv.setOnLongClickListener(new View.OnLongClickListener() {
-                    @Override
-                    public boolean onLongClick(View v) {
-                        copyToClipboard("logcat", tv.getText().toString());
-                        return true;
-                    }
-                });
-
-                final AtomicBoolean running = new AtomicBoolean(false);
-                final Process[] proc = new Process[1];
-                final Thread[] reader = new Thread[1];
-
-                final Runnable doStart = new Runnable() {
-                    @Override
-                    public void run() {
-                        if (!running.compareAndSet(false, true)) {
-                            return;
-                        }
-                        try {
-                            // 过滤：本 app 常用 tag + 致命错误
-                            String filter = "openSDK_LOG.AssistActivity:V " +
-                                    "MainActivity:V " +
-                                    "AndroidRuntime:E " +
-                                    "System.err:W *:S";
-                            proc[0] = Runtime.getRuntime().exec(
-                                    new String[]{"logcat", "-v", "time", filter});
-                            reader[0] = new Thread(new Runnable() {
-                                @Override
-                                public void run() {
-                                    BufferedReader br = null;
-                                    try {
-                                        br = new BufferedReader(
-                                                new InputStreamReader(proc[0].getInputStream()));
-                                        String line;
-                                        while ((line = br.readLine()) != null) {
-                                            if (!running.get()) break;
-                                            final String l = line;
-                                            runOnUiThread(new Runnable() {
-                                                @Override
-                                                public void run() {
-                                                    tv.append(l);
-                                                    tv.append("\n");
-                                                    scroll.post(new Runnable() {
-                                                        @Override
-                                                        public void run() {
-                                                            scroll.fullScroll(View.FOCUS_DOWN);
-                                                        }
-                                                    });
-                                                }
-                                            });
-                                        }
-                                    } catch (Throwable t) {
-                                        final String msg = "[reader 异常: " + t + "]";
-                                        runOnUiThread(new Runnable() {
-                                            @Override
-                                                public void run() {
-                                                tv.append(msg);
-                                                tv.append("\n");
-                                            }
-                                        });
-                                    } finally {
-                                        if (br != null) {
-                                            try { br.close(); } catch (Throwable ignored) {}
-                                        }
-                                    }
-                                }
-                            }, "logcat-reader");
-                            reader[0].setDaemon(true);
-                            reader[0].start();
-                            btnToggle.setText("停止 logcat");
-                        } catch (Throwable t) {
-                            running.set(false);
-                            showErrorDialog("logcat 启动失败", t);
-                        }
-                    }
-                };
-
-                final Runnable doStop = new Runnable() {
-                    @Override
-                    public void run() {
-                        if (!running.compareAndSet(true, false)) {
-                            return;
-                        }
-                        try {
-                            if (proc[0] != null) {
-                                proc[0].destroy();
-                            }
-                        } catch (Throwable ignored) {}
-                        if (reader[0] != null) {
-                            try { reader[0].interrupt(); } catch (Throwable ignored) {}
-                        }
-                        btnToggle.setText("启动 logcat");
-                    }
-                };
-
-                btnToggle.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        if (running.get()) doStop.run(); else doStart.run();
-                    }
-                });
-
-                btnClear.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        tv.setText("");
-                    }
-                });
-
-                btnCopy.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        copyToClipboard("logcat", tv.getText().toString());
-                    }
-                });
-
-                btnExport.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        try {
-                            File dir = getExternalFilesDir(null);
-                            if (dir == null) dir = getFilesDir();
-                            File out = new File(dir, "logcat_" + System.currentTimeMillis() + ".log");
-                            FileWriter fw = new FileWriter(out);
-                            try {
-                                fw.write(tv.getText().toString());
-                            } finally {
-                                try { fw.close(); } catch (Throwable ignored) {}
-                            }
-                            Toast.makeText(AssistActivity.this,
-                                    "已保存到 " + out.getAbsolutePath(),
-                                    Toast.LENGTH_LONG).show();
-                        } catch (Throwable t) {
-                            showErrorDialog("保存 logcat 失败", t);
-                        }
-                    }
-                });
-
-                final AlertDialog dialog = new AlertDialog.Builder(AssistActivity.this)
-                        .setTitle("Logcat 输出")
-                        .setView(view)
-                        .setCancelable(true)
-                        .setPositiveButton("关闭", null)
-                        .create();
-                dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
-                    @Override
-                    public void onDismiss(DialogInterface d) {
-                        if (running.get()) doStop.run();
-                    }
-                });
-                dialog.show();
             }
-        });
+        }, "assist-bg-logcat");
+        logcatReader.setDaemon(true);
+        logcatReader.start();
+    }
+
+    private void stopBgLogcat() {
+        if (!logcatRunning.compareAndSet(true, false)) return;
+        try {
+            if (logcatProc != null) logcatProc.destroy();
+        } catch (Throwable ignored) {}
+        if (logcatReader != null) {
+            try { logcatReader.interrupt(); } catch (Throwable ignored) {}
+        }
     }
 
     // ==================== Activity 生命周期 ====================
@@ -634,20 +242,40 @@ public class AssistActivity extends Activity {
     @Override
     protected void onCreate(Bundle bundle) {
         try {
+            // [修复] requestWindowFeature() / addFlags() 都必须在 setContentView 之前调用，
+            // 否则 AndroidRuntimeException: requestFeature() must be called before adding content。
+            // 这里把所有"窗口特性"调用集中放在 setContentView 之前。
+            getWindow().addFlags(0x04000000);
+
+            super.onCreate(bundle);
+            setContentView(R.layout.activity_assist);
+            tvBg = (TextView) findViewById(R.id.tvAssistBg);
+            scrollBg = (ScrollView) findViewById(R.id.scrollViewAssistBg);
+
+            appendBgLine("=== AssistActivity 启动 ===");
+            appendBgLine("pid=" + android.os.Process.myPid()
+                    + " | taskId=" + getTaskId()
+                    + " | time=" + new java.text.SimpleDateFormat(
+                            "yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                            .format(new java.util.Date()));
+
+            // 后台 logcat 实时抓取（写到背景 TextView）
+            startBgLogcat();
+
             doOnCreate(bundle);
         } catch (Throwable t) {
-            showErrorDialog("onCreate 异常", t);
+            appendBgError("onCreate 异常", t);
         }
     }
 
     private void doOnCreate(Bundle bundle) {
-        getWindow().addFlags(0x04000000);
-        requestWindowFeature(1);
-        super.onCreate(bundle);
+        // [修复] 主题已经是 Theme.WNLZInjector(NoActionBar)，不再调用 requestWindowFeature(1)。
+        // 旧代码在 setContentView 之后调用 requestWindowFeature 会抛
+        // "requestFeature() must be called before adding content"。
         this.f = getIntent().getBooleanExtra(Constants.KEY_RESTORE_LANDSCAPE, false);
-        logDialog("openSDK_LOG.AssistActivity", "--onCreate-- mRestoreLandscape=" + this.f);
+        logToBg("openSDK_LOG.AssistActivity", "--onCreate-- mRestoreLandscape=" + this.f);
         if (getIntent() == null) {
-            logDialog("openSDK_LOG.AssistActivity", "-->onCreate--getIntent() returns null");
+            logToBg("openSDK_LOG.AssistActivity", "-->onCreate--getIntent() returns null");
             promptFinish("onCreate 中 getIntent() 为 null");
             return;
         }
@@ -660,13 +288,13 @@ public class AssistActivity extends Activity {
             this.a = bundle.getBoolean("RESUME_FLAG", false);
         }
         if (this.c) {
-            logDialog("openSDK_LOG.AssistActivity", "is restart");
+            logToBg("openSDK_LOG.AssistActivity", "is restart");
             return;
         }
         if (bundleExtra == null) {
             PendingIntent pendingIntent = (PendingIntent) getIntent().getParcelableExtra(KEY_EXTRA_PENDING_INTENT);
             if (intent != null && pendingIntent != null) {
-                logDialog("openSDK_LOG.AssistActivity", "--onCreate--activityIntent not null, will start activity, reqcode = " + intExtra);
+                logToBg("openSDK_LOG.AssistActivity", "--onCreate--activityIntent not null, will start activity, reqcode = " + intExtra);
                 try {
                     IntentFilter intentFilter = new IntentFilter("com.tencent.tauth.opensdk.SHARE_SUCCESS_AND_STAY_QQ_" + intent.getData().getQueryParameter("share_id"));
                     if (this.e == null) {
@@ -674,38 +302,79 @@ public class AssistActivity extends Activity {
                     }
                     registerReceiver(this.e, intentFilter, Context.RECEIVER_NOT_EXPORTED);
                 } catch (Throwable t) {
-                    showErrorDialog("onCreate.registerReceiver 异常", t);
+                    appendBgError("onCreate.registerReceiver 异常", t);
                 }
                 try {
                     final IntentSender intentSender = pendingIntent.getIntentSender();
                     final Intent finalIntent = intent;
                     final int finalIntExtra = intExtra;
                     final PendingIntent finalPendingIntent = pendingIntent;
-                    // 执行 startIntentSender* 前先弹 dialog 展示 intent 详情，
-                    // 用户确认后才真正发起 IntentSender / PendingIntent 授权流
-                    showIntentDetailsDialog(intent, pendingIntent, new Runnable() {
+                    final String intentDescription = describeIntent(intent, pendingIntent);
+
+                    // 同时把 Intent 详情落到背景 TextView，方便复盘
+                    appendBgLine("[Intent 详情（即将弹出确认对话框）] " + intentDescription);
+
+                    // 弹出 AlertDialog 让用户确认即将执行的 Intent / PendingIntent
+                    if (isFinishing() || isDestroyed()) {
+                        logToBg("openSDK_LOG.AssistActivity", "Activity 已销毁，跳过 Intent 详情对话框");
+                        return;
+                    }
+                    AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                    builder.setTitle("即将跳转到 QQ 组件");
+                    builder.setMessage(intentDescription);
+                    builder.setCancelable(false);
+                    builder.setPositiveButton("执行", new DialogInterface.OnClickListener() {
                         @Override
-                        public void run() {
+                        public void onClick(DialogInterface dialog, int which) {
                             try {
-                                if (finalIntent.getBooleanExtra("for_result", true)) {
-                                    startIntentSenderForResult(intentSender, finalIntExtra, null, 0, 0, 0);
-                                } else {
-                                    startIntentSender(intentSender, null, 0, 0, 0);
+                                dialog.dismiss();
+                                if (isFinishing() || isDestroyed()) return;
+                                try {
+                                    if (finalIntent.getBooleanExtra("for_result", true)) {
+                                        startIntentSenderForResult(intentSender, finalIntExtra, null, 0, 0, 0);
+                                    } else {
+                                        startIntentSender(intentSender, null, 0, 0, 0);
+                                    }
+                                    a(finalIntent, true);
+                                } catch (Throwable t) {
+                                    appendBgError("startIntentSender* 异常", t);
                                 }
-                                a(finalIntent, true);
                             } catch (Throwable t) {
-                                showErrorDialog("startIntentSender* 异常", t);
+                                appendBgError("Intent 详情对话框.执行 回调异常", t);
                             }
                         }
-                    }, new Runnable() {
+                    });
+                    builder.setNegativeButton("取消", new DialogInterface.OnClickListener() {
                         @Override
-                        public void run() {
-                            logDialog("openSDK_LOG.AssistActivity", "用户取消执行 IntentSender");
+                        public void onClick(DialogInterface dialog, int which) {
+                            try {
+                                dialog.dismiss();
+                                if (isFinishing() || isDestroyed()) return;
+                                IUiListener listnerWithRequestCode = UIListenerManager.getInstance().getListnerWithRequestCode(finalIntExtra);
+                                if (listnerWithRequestCode != null) {
+                                    listnerWithRequestCode.onError(new UiError(901, "用户在 Intent 详情对话框中取消", ""));
+                                }
+                                promptFinish("用户在 Intent 详情对话框点击取消");
+                            } catch (Throwable t) {
+                                appendBgError("Intent 详情对话框.取消 回调异常", t);
+                            }
                         }
                     });
+                    builder.setOnCancelListener(new DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(DialogInterface dialog) {
+                            try {
+                                if (isFinishing() || isDestroyed()) return;
+                                promptFinish("Intent 详情对话框被外部取消（back 等）");
+                            } catch (Throwable t) {
+                                appendBgError("Intent 详情对话框.onCancel 异常", t);
+                            }
+                        }
+                    });
+                    builder.show();
                     return;
                 } catch (ActivityNotFoundException e2) {
-                    logDialog("openSDK_LOG.AssistActivity", "--onCreate--startActivity exception, ActivityNotFoundException : " + e2);
+                    logToBg("openSDK_LOG.AssistActivity", "--onCreate--startActivity exception, ActivityNotFoundException : " + e2);
                     IUiListener listnerWithRequestCode = UIListenerManager.getInstance().getListnerWithRequestCode(intExtra);
                     if (listnerWithRequestCode != null) {
                         listnerWithRequestCode.onError(new UiError(-20, "手Q版本过低，请下载安装最新版手Q", ""));
@@ -713,7 +382,7 @@ public class AssistActivity extends Activity {
                     a(intent, false);
                     return;
                 } catch (Throwable e3) {
-                    showErrorDialog("onCreate.startIntentSender 异常", e3);
+                    appendBgError("onCreate.startIntentSender 异常", e3);
                     promptFinish("onCreate 中启动目标 Activity 抛异常: " + e3.getMessage());
                     return;
                 }
@@ -723,11 +392,11 @@ public class AssistActivity extends Activity {
             sb.append(intent == null);
             sb.append(", pendingIntent is null? ");
             sb.append(pendingIntent == null);
-            logDialog("openSDK_LOG.AssistActivity", sb.toString());
+            logToBg("openSDK_LOG.AssistActivity", sb.toString());
             promptFinish("onCreate 中 activityIntent 或 pendingIntent 为 null，无法继续");
             return;
         }
-        logDialog("openSDK_LOG.AssistActivity", "--onCreate--h5 bundle not null, will open browser");
+        logToBg("openSDK_LOG.AssistActivity", "--onCreate--h5 bundle not null, will open browser");
         a(bundleExtra);
     }
 
@@ -735,13 +404,13 @@ public class AssistActivity extends Activity {
         try {
             doA(intent, z);
         } catch (Throwable t) {
-            showErrorDialog("a(Intent, boolean) 异常", t);
+            appendBgError("a(Intent, boolean) 异常", t);
         }
     }
 
     private void doA(Intent intent, boolean z) {
         if (intent == null) {
-            logDialog("openSDK_LOG.AssistActivity", "reportStartActivitySuccess, but intent is null.");
+            logToBg("openSDK_LOG.AssistActivity", "reportStartActivitySuccess, but intent is null.");
             return;
         }
         Bundle bundleExtra = intent.getBundleExtra(Constants.KEY_PASS_REPORT_VIA_PARAM);
@@ -754,10 +423,10 @@ public class AssistActivity extends Activity {
     @Override
     protected void onStart() {
         try {
-            logDialog("openSDK_LOG.AssistActivity", "-->onStart");
+            logToBg("openSDK_LOG.AssistActivity", "-->onStart");
             super.onStart();
         } catch (Throwable t) {
-            showErrorDialog("onStart 异常", t);
+            appendBgError("onStart 异常", t);
         }
     }
 
@@ -766,12 +435,12 @@ public class AssistActivity extends Activity {
         try {
             doOnResume();
         } catch (Throwable t) {
-            showErrorDialog("onResume 异常", t);
+            appendBgError("onResume 异常", t);
         }
     }
 
     private void doOnResume() {
-        logDialog("openSDK_LOG.AssistActivity", "-->onResume");
+        logToBg("openSDK_LOG.AssistActivity", "-->onResume");
         super.onResume();
         Intent intent = getIntent();
         if (intent.getBooleanExtra("is_login", false)) {
@@ -790,11 +459,11 @@ public class AssistActivity extends Activity {
     @Override
     protected void onPause() {
         try {
-            logDialog("openSDK_LOG.AssistActivity", "-->onPause");
+            logToBg("openSDK_LOG.AssistActivity", "-->onPause");
             this.b.removeMessages(0);
             super.onPause();
         } catch (Throwable t) {
-            showErrorDialog("onPause 异常", t);
+            appendBgError("onPause 异常", t);
         }
     }
 
@@ -803,39 +472,41 @@ public class AssistActivity extends Activity {
         try {
             doOnStop();
         } catch (Throwable t) {
-            showErrorDialog("onStop 异常", t);
+            appendBgError("onStop 异常", t);
         }
     }
 
     private void doOnStop() {
-        logDialog("openSDK_LOG.AssistActivity", "-->onStop");
+        logToBg("openSDK_LOG.AssistActivity", "-->onStop");
         super.onStop();
         if (Tencent.disableResetOrientation) {
             return;
         }
         try {
             int intExtra = getIntent().getIntExtra(KEY_REQUEST_ORIENTATION, -1);
-            logDialog("openSDK_LOG.AssistActivity", "getRequestedOrientation= " + intExtra);
+            logToBg("openSDK_LOG.AssistActivity", "getRequestedOrientation= " + intExtra);
             if (intExtra != -1) {
                 setRequestedOrientation(intExtra);
             }
         } catch (Throwable th) {
-            SLog.e("openSDK_LOG.AssistActivity", "reset requestedOrientation catch exception", th);
-            showErrorDialog("onStop.resetRequestedOrientation 异常", th);
+            try { SLog.e("openSDK_LOG.AssistActivity", "reset requestedOrientation catch exception", th); } catch (Throwable ignored) {}
+            appendBgError("onStop.resetRequestedOrientation 异常", th);
         }
     }
 
     @Override
     protected void onDestroy() {
         try {
-            logDialog("openSDK_LOG.AssistActivity", "-->onDestroy");
+            logToBg("openSDK_LOG.AssistActivity", "-->onDestroy");
+            stopBgLogcat();
             super.onDestroy();
             QQStayReceiver qQStayReceiver = this.e;
             if (qQStayReceiver != null) {
-                unregisterReceiver(qQStayReceiver);
+                try { unregisterReceiver(qQStayReceiver); } catch (Throwable ignored) {}
             }
+            appendBgLine("=== AssistActivity 已销毁 ===");
         } catch (Throwable t) {
-            showErrorDialog("onDestroy 异常", t);
+            appendBgError("onDestroy 异常", t);
         }
     }
 
@@ -844,24 +515,22 @@ public class AssistActivity extends Activity {
         try {
             doOnNewIntent(intent);
         } catch (Throwable t) {
-            showErrorDialog("onNewIntent 异常", t);
+            appendBgError("onNewIntent 异常", t);
         }
     }
 
     private void doOnNewIntent(Intent intent) {
-        logDialog("openSDK_LOG.AssistActivity", "--onNewIntent");
+        logToBg("openSDK_LOG.AssistActivity", "--onNewIntent");
         super.onNewIntent(intent);
         int intExtra = intent.getIntExtra("key_request_code", -1);
-        logDialog("openSDK_LOG.AssistActivity", "--onNewIntent callbackRequestCode= " + intExtra);
+        logToBg("openSDK_LOG.AssistActivity", "--onNewIntent callbackRequestCode= " + intExtra);
         if (intExtra == 10108) {
             intent.putExtra("key_action", "action_request_avatar");
             if (intent.getBooleanExtra("stay_back_stack", false)) {
                 moveTaskToBack(true);
             }
             setResult(-1, intent);
-            if (isFinishing()) {
-                return;
-            }
+            if (isFinishing()) return;
             promptFinish("onNewIntent key_request_code=10108 (action_request_avatar)");
             return;
         }
@@ -871,9 +540,7 @@ public class AssistActivity extends Activity {
                 moveTaskToBack(true);
             }
             setResult(-1, intent);
-            if (isFinishing()) {
-                return;
-            }
+            if (isFinishing()) return;
             promptFinish("onNewIntent key_request_code=10109 (action_request_set_emotion)");
             return;
         }
@@ -883,9 +550,7 @@ public class AssistActivity extends Activity {
                 moveTaskToBack(true);
             }
             setResult(-1, intent);
-            if (isFinishing()) {
-                return;
-            }
+            if (isFinishing()) return;
             promptFinish("onNewIntent key_request_code=10110 (action_request_dynamic_avatar)");
             return;
         }
@@ -895,9 +560,7 @@ public class AssistActivity extends Activity {
                 moveTaskToBack(true);
             }
             setResult(-1, intent);
-            if (isFinishing()) {
-                return;
-            }
+            if (isFinishing()) return;
             promptFinish("onNewIntent key_request_code=10111 (joinGroup)");
             return;
         }
@@ -907,48 +570,40 @@ public class AssistActivity extends Activity {
                 moveTaskToBack(true);
             }
             setResult(-1, intent);
-            if (isFinishing()) {
-                return;
-            }
+            if (isFinishing()) return;
             promptFinish("onNewIntent key_request_code=10112 (bindGroup)");
             return;
         }
         if (intExtra == 10113) {
             intent.putExtra("key_action", intent.getStringExtra("action"));
             setResult(-1, intent);
-            if (isFinishing()) {
-                return;
-            }
+            if (isFinishing()) return;
             promptFinish("onNewIntent key_request_code=10113");
             return;
         }
         if (intExtra == 10114) {
             intent.putExtra("key_action", intent.getStringExtra("action"));
             setResult(-1, intent);
-            if (isFinishing()) {
-                return;
-            }
+            if (isFinishing()) return;
             promptFinish("onNewIntent key_request_code=10114");
             return;
         }
         intent.putExtra("key_action", "action_share");
         setResult(-1, intent);
-        if (isFinishing()) {
-            return;
-        }
-        logDialog("openSDK_LOG.AssistActivity", "--onNewIntent--activity not finished, finish now");
+        if (isFinishing()) return;
+        logToBg("openSDK_LOG.AssistActivity", "--onNewIntent--activity not finished, finish now");
         promptFinish("onNewIntent 默认分支 (action_share)");
     }
 
     @Override
     protected void onSaveInstanceState(Bundle bundle) {
         try {
-            logDialog("openSDK_LOG.AssistActivity", "--onSaveInstanceState--");
+            logToBg("openSDK_LOG.AssistActivity", "--onSaveInstanceState--");
             bundle.putBoolean("RESTART_FLAG", true);
             bundle.putBoolean("RESUME_FLAG", this.a);
             super.onSaveInstanceState(bundle);
         } catch (Throwable t) {
-            showErrorDialog("onSaveInstanceState 异常", t);
+            appendBgError("onSaveInstanceState 异常", t);
         }
     }
 
@@ -957,7 +612,7 @@ public class AssistActivity extends Activity {
         try {
             doOnActivityResult(i, i2, intent);
         } catch (Throwable t) {
-            showErrorDialog("onActivityResult 异常", t);
+            appendBgError("onActivityResult 异常", t);
         }
     }
 
@@ -969,7 +624,7 @@ public class AssistActivity extends Activity {
         sb.append(i2);
         sb.append("data = null ? ");
         sb.append(intent == null);
-        logDialog("openSDK_LOG.AssistActivity", sb.toString());
+        logToBg("openSDK_LOG.AssistActivity", sb.toString());
         super.onActivityResult(i, i2, intent);
         if (i == 0) {
             return;
@@ -979,17 +634,17 @@ public class AssistActivity extends Activity {
         }
         setResultData(i, intent);
         if (!this.f) {
-            logDialog("openSDK_LOG.AssistActivity", "onActivityResult finish immediate");
+            logToBg("openSDK_LOG.AssistActivity", "onActivityResult finish immediate");
             promptFinish("onActivityResult 立即 finish (requestCode=" + i + ")");
         } else {
             new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                 @Override
                 public void run() {
                     try {
-                        logDialog("openSDK_LOG.AssistActivity", "onActivityResult finish delay");
+                        logToBg("openSDK_LOG.AssistActivity", "onActivityResult finish delay");
                         AssistActivity.this.promptFinish("onActivityResult 延时 finish");
                     } catch (Throwable t) {
-                        showErrorDialog("onActivityResult.delayed 异常", t);
+                        appendBgError("onActivityResult.delayed 异常", t);
                     }
                 }
             }, 200L);
@@ -1000,13 +655,13 @@ public class AssistActivity extends Activity {
         try {
             doSetResultData(i, intent);
         } catch (Throwable t) {
-            showErrorDialog("setResultData 异常", t);
+            appendBgError("setResultData 异常", t);
         }
     }
 
     private void doSetResultData(int i, Intent intent) {
         if (intent == null) {
-            logDialog("openSDK_LOG.AssistActivity", "--setResultData--intent is null, setResult ACTIVITY_CANCEL");
+            logToBg("openSDK_LOG.AssistActivity", "--setResultData--intent is null, setResult ACTIVITY_CANCEL");
             setResult(0);
             if (i == 11101) {
                 com.wunelezi.injector.tencent.open.b.e.a().a("", this.d, "2", "1", "7", "2");
@@ -1016,7 +671,7 @@ public class AssistActivity extends Activity {
         }
         try {
             String stringExtra = intent.getStringExtra("key_response");
-            logDialog("openSDK_LOG.AssistActivity", "--setResultDataForLogin-- ");
+            logToBg("openSDK_LOG.AssistActivity", "--setResultDataForLogin-- ");
             if (!TextUtils.isEmpty(stringExtra)) {
                 JSONObject jSONObject = new JSONObject(stringExtra);
                 String optString = jSONObject.optString("openid");
@@ -1024,25 +679,25 @@ public class AssistActivity extends Activity {
                 String optString3 = jSONObject.optString("proxy_code");
                 long optLong = jSONObject.optLong("proxy_expires_in");
                 if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                    logDialog("openSDK_LOG.AssistActivity", "--setResultData--openid and token not empty, setResult ACTIVITY_OK");
+                    logToBg("openSDK_LOG.AssistActivity", "--setResultData--openid and token not empty, setResult ACTIVITY_OK");
                     setResult(-1, intent);
                     com.wunelezi.injector.tencent.open.b.e.a().a(optString, this.d, "2", "1", "7", "0");
                 } else if (!TextUtils.isEmpty(optString3) && optLong != 0) {
-                    logDialog("openSDK_LOG.AssistActivity", "--setResultData--proxy_code and proxy_expires_in are valid");
+                    logToBg("openSDK_LOG.AssistActivity", "--setResultData--proxy_code and proxy_expires_in are valid");
                     setResult(-1, intent);
                 } else {
-                    logDialog("openSDK_LOG.AssistActivity", "--setResultData--openid or token is empty, setResult ACTIVITY_CANCEL");
+                    logToBg("openSDK_LOG.AssistActivity", "--setResultData--openid or token is empty, setResult ACTIVITY_CANCEL");
                     setResult(0, intent);
                     com.wunelezi.injector.tencent.open.b.e.a().a("", this.d, "2", "1", "7", "1");
                 }
             } else {
-                logDialog("openSDK_LOG.AssistActivity", "--setResultData--response is empty, setResult ACTIVITY_OK");
+                logToBg("openSDK_LOG.AssistActivity", "--setResultData--response is empty, setResult ACTIVITY_OK");
                 setResult(-1, intent);
             }
         } catch (Throwable e) {
-            SLog.e("openSDK_LOG.AssistActivity", "--setResultData--parse response failed");
-            showErrorDialog("setResultData.parseResponse 异常", e);
-            e.printStackTrace();
+            try { SLog.e("openSDK_LOG.AssistActivity", "--setResultData--parse response failed"); } catch (Throwable ignored) {}
+            appendBgError("setResultData.parseResponse 异常", e);
+            try { e.printStackTrace(); } catch (Throwable ignored) {}
         }
     }
 
@@ -1050,7 +705,7 @@ public class AssistActivity extends Activity {
         try {
             doABundle(bundle);
         } catch (Throwable t) {
-            showErrorDialog("a(Bundle) 异常", t);
+            appendBgError("a(Bundle) 异常", t);
         }
     }
 
@@ -1092,6 +747,66 @@ public class AssistActivity extends Activity {
         getIntent().removeExtra("shareH5");
     }
 
+    /**
+     * 把 Intent / PendingIntent 关键字段文本化（直接返回字符串，便于日志写入）。
+     */
+    private String describeIntent(Intent intent, PendingIntent pendingIntent) {
+        StringBuilder sb = new StringBuilder();
+        if (intent == null) {
+            sb.append("intent == null");
+        } else {
+            ComponentName cn = intent.getComponent();
+            sb.append("Component: ").append(cn != null ? cn.flattenToString() : "(无)").append(" | ");
+            if (intent.getAction() != null) {
+                sb.append("Action: ").append(intent.getAction()).append(" | ");
+            }
+            Uri data = intent.getData();
+            if (data != null) {
+                sb.append("Data: ").append(data.toString()).append(" | ");
+            }
+            String type = intent.getType();
+            if (type != null) {
+                sb.append("Type: ").append(type).append(" | ");
+            }
+            if (intent.getCategories() != null && !intent.getCategories().isEmpty()) {
+                sb.append("Categories: ").append(intent.getCategories()).append(" | ");
+            }
+            Bundle extras = intent.getExtras();
+            if (extras != null && !extras.isEmpty()) {
+                sb.append("Extras: {");
+                for (String key : extras.keySet()) {
+                    Object v;
+                    try {
+                        v = extras.get(key);
+                    } catch (Throwable t) {
+                        v = "(get 异常: " + t.getMessage() + ")";
+                    }
+                    sb.append(key).append("=");
+                    if (v == null) {
+                        sb.append("null,");
+                    } else {
+                        sb.append(v.toString()).append(",");
+                    }
+                }
+                sb.append("} | ");
+            }
+            sb.append("Flags: 0x").append(Integer.toHexString(intent.getFlags()));
+        }
+        if (pendingIntent != null) {
+            sb.append(" || PendingIntent:");
+            try {
+                sb.append(" creatorPackage=").append(pendingIntent.getCreatorPackage());
+            } catch (Throwable ignored) {}
+            try {
+                sb.append(" creatorUid=").append(pendingIntent.getCreatorUid());
+            } catch (Throwable ignored) {}
+            sb.append(" isActivity=").append(pendingIntent.isActivity());
+            sb.append(" isBroadcast=").append(pendingIntent.isBroadcast());
+            sb.append(" isService=").append(pendingIntent.isService());
+        }
+        return sb.toString();
+    }
+
     private class QQStayReceiver extends BroadcastReceiver {
         private QQStayReceiver() {
         }
@@ -1101,7 +816,7 @@ public class AssistActivity extends Activity {
             try {
                 doOnReceive(context, intent);
             } catch (Throwable t) {
-                showErrorDialog("QQStayReceiver.onReceive 异常", t);
+                appendBgError("QQStayReceiver.onReceive 异常", t);
             }
         }
 
@@ -1121,7 +836,7 @@ public class AssistActivity extends Activity {
                 }
                 intent2.setData(uri);
             } catch (Throwable e) {
-                showErrorDialog("QQStayReceiver.parseUri 异常", e);
+                appendBgError("QQStayReceiver.parseUri 异常", e);
                 intent2.putExtra("result", "error");
                 intent2.putExtra("response", "parse error.");
             }

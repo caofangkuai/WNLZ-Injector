@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 #
 # Copyright © 2015-2021 the original authors.
@@ -121,68 +121,17 @@ if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
     esac
 fi
 
-# Collect all arguments for the java command;
-#   * $DEFAULT_JVM_OPTS, $JAVA_OPTS, and $GRADLE_OPTS can contain fragments of
-#     shell script including quotes and variable substitutions, so put them in
-#     double quotes to make sure that they get re-expanded; and
-#   * put everything else in single quotes, so that it's not re-expanded.
+# Collect all arguments for the java command:
+#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS can contain shell-script
+#     fragments (quotes, variable substitutions). Keep them double-quoted so
+#     they re-expand here.
+#   * Everything else must be single-quoted to avoid re-expansion.
 
-set -- \
-        "-Dorg.gradle.appname=$APP_BASE_NAME" \
-        -classpath "$CLASSPATH" \
-        org.gradle.wrapper.GradleWrapperMain \
-        "$@"
-
-# Stop when "x x" is not a valid value for an "if" command.
-if ! "$cygwin" && ! "$msys" ; then
-    case $( set -- "$@"; echo "${1:-}" ) in
-        '' | *[!0-9]*)
-            ;;
-        *)
-            set -- -e "$@" ;;
-    esac
-fi
-
-# Escape application args.
-save () {
-    for arg do
-        if printf '%s\n' "$arg" | grep '^[^[:alnum:]=+-@]' >/dev/null 2>&1; then
-            printf '%s\n' "" "$arg" ""
-        else
-            printf '%s\n' "$arg"
-        fi
-    done
-}
-
-eval "set -- $( save "$@" )"
-
-# In place remainder for the case cygwin/msys.
-if "$cygwin" || "$msys" ; then
-    APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
-    CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )
-
-    JAVACMD=$( cygpath --unix "$JAVACMD" )
-
-    # Now convert the arguments - don't use eval, it loses the quoting.
-    for arg do
-        if [ "$arg" = "--" ]; then
-            shift
-            break
-        fi
-        arg=$( cygpath --path --ignore --mixed -- "$arg" )
-        set -- "$arg" "$@"
-    done
-    shift
-fi
-
-# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
-
-# Collect all arguments for the java command;
-#   * $DEFAULT_JVM_OPTS, $JAVA_OPTS, and $GRADLE_OPTS can contain fragments of
-#     shell script including quotes and variable substitutions, so put them in
-#     double quotes to make sure that they get re-expanded; and
-#   * put everything else in single quotes, so that it's not re-expanded.
+# [修复] 删掉了"两次 set -- + 末尾 exec"$@" "" 的写法。
+# 原写法在沙箱 bash 里会被 gradle-wrapper.jar 错误地解析第二份 -classpath
+# 参数（被截断为 "lasspath"），导致
+#     "The specified settings file '/workspace/WNLZ-Injector/lasspath' does not exist."
+# 修复后只构造一次参数列表直接 exec。
 
 set -- \
         "-Dorg.gradle.appname=$APP_BASE_NAME" \

@@ -235,7 +235,7 @@ public class AssistActivity extends Activity {
             if (type != null) {
                 sb.append("Type: ").append(type).append("\n");
             }
-            if (!intent.getCategories().isEmpty()) {
+            if (intent.getCategories() != null && !intent.getCategories().isEmpty()) {
                 sb.append("Categories: ").append(intent.getCategories()).append("\n");
             }
             Bundle extras = intent.getExtras();

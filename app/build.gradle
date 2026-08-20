@@ -3,7 +3,8 @@ apply plugin: 'kotlin-android'
 
 android {
     namespace 'com.wunelezi.injector'
-    compileSdk 33
+    compileSdk 34
+    buildToolsVersion "33.0.2"
 
     signingConfigs {
         release {
@@ -16,8 +17,8 @@ android {
 
     defaultConfig {
         applicationId "com.wunelezi.injector"
-        minSdk 26
-        targetSdk 33
+        minSdk 24
+        targetSdk 34
         versionCode 1
         versionName "1.0"
         signingConfig signingConfigs.release

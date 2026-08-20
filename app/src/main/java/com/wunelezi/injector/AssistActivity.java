@@ -38,9 +38,13 @@ public class AssistActivity extends Activity {
     protected Handler b = new Handler() {
         @Override
         public void handleMessage(Message message) {
-            if (message.what == 0 && !AssistActivity.this.isFinishing()) {
-                logDialog("openSDK_LOG.AssistActivity", "-->finish by timeout");
-                AssistActivity.this.promptFinish("超时触发 finish（timeout）");
+            try {
+                if (message.what == 0 && !AssistActivity.this.isFinishing()) {
+                    logDialog("openSDK_LOG.AssistActivity", "-->finish by timeout");
+                    AssistActivity.this.promptFinish("超时触发 finish（timeout）");
+                }
+            } catch (Throwable t) {
+                showErrorDialog("Handler.handleMessage 异常", t);
             }
         }
     };
@@ -74,7 +78,77 @@ public class AssistActivity extends Activity {
     }
 
     /**
-     * 不再主动 finish()，改为弹出提示，由用户点“确认关闭”才真正结束 Activity。
+     * 通用异常弹窗：无论哪个方法里抛了 Throwable，都尽量用 dialog 反馈，
+     * 避免崩溃导致 StartAnyWhere 流程中断后用户毫无线索。
+     */
+    private void showErrorDialog(final String title, final Throwable t) {
+        if (t == null) return;
+        SLog.e(title, "AssistActivity 捕获异常", t);
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                StringBuilder sb = new StringBuilder();
+                sb.append("异常类型: ").append(t.getClass().getSimpleName()).append("\n");
+                sb.append("错误信息: ").append(t.getMessage()).append("\n\n");
+                sb.append("堆栈:\n");
+                StackTraceElement[] stack = t.getStackTrace();
+                int n = Math.min(15, stack == null ? 0 : stack.length);
+                for (int i = 0; i < n; i++) {
+                    sb.append("  at ").append(stack[i]).append("\n");
+                }
+                new AlertDialog.Builder(AssistActivity.this)
+                        .setTitle(title)
+                        .setMessage(sb.toString())
+                        .setCancelable(true)
+                        .setPositiveButton(android.R.string.ok, null)
+                        .show();
+            }
+        });
+    }
+
+    /** Throwable 异常的弹窗便捷方法，message 为可选说明 */
+    private void showErrorDialog(final String title, final String message, final Throwable t) {
+        if (t == null) return;
+        SLog.e(title, message, t);
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                StringBuilder sb = new StringBuilder();
+                if (message != null && !message.isEmpty()) {
+                    sb.append(message).append("\n\n");
+                }
+                sb.append("异常类型: ").append(t.getClass().getSimpleName()).append("\n");
+                sb.append("错误信息: ").append(t.getMessage()).append("\n\n");
+                sb.append("堆栈:\n");
+                StackTraceElement[] stack = t.getStackTrace();
+                int n = Math.min(15, stack == null ? 0 : stack.length);
+                for (int i = 0; i < n; i++) {
+                    sb.append("  at ").append(stack[i]).append("\n");
+                }
+                new AlertDialog.Builder(AssistActivity.this)
+                        .setTitle(title)
+                        .setMessage(sb.toString())
+                        .setCancelable(true)
+                        .setPositiveButton(android.R.string.ok, null)
+                        .show();
+            }
+        });
+    }
+
+    /**
+     * 不再主动 finish()，改为弹出提示，由用户点"确认关闭"才真正结束 Activity。
      */
     private void promptFinish(final String reason) {
         if (isFinishing() || isDestroyed()) {
@@ -103,6 +177,14 @@ public class AssistActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle bundle) {
+        try {
+            doOnCreate(bundle);
+        } catch (Throwable t) {
+            showErrorDialog("onCreate 异常", t);
+        }
+    }
+
+    private void doOnCreate(Bundle bundle) {
         getWindow().addFlags(0x04000000);
         requestWindowFeature(1);
         super.onCreate(bundle);
@@ -135,8 +217,8 @@ public class AssistActivity extends Activity {
                         this.e = new QQStayReceiver();
                     }
                     registerReceiver(this.e, intentFilter, Context.RECEIVER_NOT_EXPORTED);
-                } catch (Exception e) {
-                    logDialog("openSDK_LOG.AssistActivity", "registerReceiver exception : " + e.getMessage());
+                } catch (Throwable t) {
+                    showErrorDialog("onCreate.registerReceiver 异常", t);
                 }
                 try {
                     IntentSender intentSender = pendingIntent.getIntentSender();
@@ -155,9 +237,8 @@ public class AssistActivity extends Activity {
                     }
                     a(intent, false);
                     return;
-                } catch (Exception e3) {
-                    logDialog("openSDK_LOG.AssistActivity", "--onCreate--startActivity exception: " + e3.getMessage());
-                    logDialog("openSDK_LOG.AssistActivity", "--onCreate--startActException");
+                } catch (Throwable e3) {
+                    showErrorDialog("onCreate.startIntentSender 异常", e3);
                     promptFinish("onCreate 中启动目标 Activity 抛异常: " + e3.getMessage());
                     return;
                 }
@@ -176,6 +257,14 @@ public class AssistActivity extends Activity {
     }
 
     private void a(Intent intent, boolean z) {
+        try {
+            doA(intent, z);
+        } catch (Throwable t) {
+            showErrorDialog("a(Intent, boolean) 异常", t);
+        }
+    }
+
+    private void doA(Intent intent, boolean z) {
         if (intent == null) {
             logDialog("openSDK_LOG.AssistActivity", "reportStartActivitySuccess, but intent is null.");
             return;
@@ -189,12 +278,24 @@ public class AssistActivity extends Activity {
 
     @Override
     protected void onStart() {
-        logDialog("openSDK_LOG.AssistActivity", "-->onStart");
-        super.onStart();
+        try {
+            logDialog("openSDK_LOG.AssistActivity", "-->onStart");
+            super.onStart();
+        } catch (Throwable t) {
+            showErrorDialog("onStart 异常", t);
+        }
     }
 
     @Override
     protected void onResume() {
+        try {
+            doOnResume();
+        } catch (Throwable t) {
+            showErrorDialog("onResume 异常", t);
+        }
+    }
+
+    private void doOnResume() {
         logDialog("openSDK_LOG.AssistActivity", "-->onResume");
         super.onResume();
         Intent intent = getIntent();
@@ -213,13 +314,25 @@ public class AssistActivity extends Activity {
 
     @Override
     protected void onPause() {
-        logDialog("openSDK_LOG.AssistActivity", "-->onPause");
-        this.b.removeMessages(0);
-        super.onPause();
+        try {
+            logDialog("openSDK_LOG.AssistActivity", "-->onPause");
+            this.b.removeMessages(0);
+            super.onPause();
+        } catch (Throwable t) {
+            showErrorDialog("onPause 异常", t);
+        }
     }
 
     @Override
     protected void onStop() {
+        try {
+            doOnStop();
+        } catch (Throwable t) {
+            showErrorDialog("onStop 异常", t);
+        }
+    }
+
+    private void doOnStop() {
         logDialog("openSDK_LOG.AssistActivity", "-->onStop");
         super.onStop();
         if (Tencent.disableResetOrientation) {
@@ -233,22 +346,34 @@ public class AssistActivity extends Activity {
             }
         } catch (Throwable th) {
             SLog.e("openSDK_LOG.AssistActivity", "reset requestedOrientation catch exception", th);
-            logDialog("openSDK_LOG.AssistActivity", "reset requestedOrientation catch exception: " + th.getMessage());
+            showErrorDialog("onStop.resetRequestedOrientation 异常", th);
         }
     }
 
     @Override
     protected void onDestroy() {
-        logDialog("openSDK_LOG.AssistActivity", "-->onDestroy");
-        super.onDestroy();
-        QQStayReceiver qQStayReceiver = this.e;
-        if (qQStayReceiver != null) {
-            unregisterReceiver(qQStayReceiver);
+        try {
+            logDialog("openSDK_LOG.AssistActivity", "-->onDestroy");
+            super.onDestroy();
+            QQStayReceiver qQStayReceiver = this.e;
+            if (qQStayReceiver != null) {
+                unregisterReceiver(qQStayReceiver);
+            }
+        } catch (Throwable t) {
+            showErrorDialog("onDestroy 异常", t);
         }
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
+        try {
+            doOnNewIntent(intent);
+        } catch (Throwable t) {
+            showErrorDialog("onNewIntent 异常", t);
+        }
+    }
+
+    private void doOnNewIntent(Intent intent) {
         logDialog("openSDK_LOG.AssistActivity", "--onNewIntent");
         super.onNewIntent(intent);
         int intExtra = intent.getIntExtra("key_request_code", -1);
@@ -342,14 +467,26 @@ public class AssistActivity extends Activity {
 
     @Override
     protected void onSaveInstanceState(Bundle bundle) {
-        logDialog("openSDK_LOG.AssistActivity", "--onSaveInstanceState--");
-        bundle.putBoolean("RESTART_FLAG", true);
-        bundle.putBoolean("RESUME_FLAG", this.a);
-        super.onSaveInstanceState(bundle);
+        try {
+            logDialog("openSDK_LOG.AssistActivity", "--onSaveInstanceState--");
+            bundle.putBoolean("RESTART_FLAG", true);
+            bundle.putBoolean("RESUME_FLAG", this.a);
+            super.onSaveInstanceState(bundle);
+        } catch (Throwable t) {
+            showErrorDialog("onSaveInstanceState 异常", t);
+        }
     }
 
     @Override
     protected void onActivityResult(int i, int i2, Intent intent) {
+        try {
+            doOnActivityResult(i, i2, intent);
+        } catch (Throwable t) {
+            showErrorDialog("onActivityResult 异常", t);
+        }
+    }
+
+    private void doOnActivityResult(int i, int i2, Intent intent) {
         StringBuilder sb = new StringBuilder();
         sb.append("--onActivityResult--requestCode: ");
         sb.append(i);
@@ -373,14 +510,26 @@ public class AssistActivity extends Activity {
             new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    logDialog("openSDK_LOG.AssistActivity", "onActivityResult finish delay");
-                    AssistActivity.this.promptFinish("onActivityResult 延时 finish");
+                    try {
+                        logDialog("openSDK_LOG.AssistActivity", "onActivityResult finish delay");
+                        AssistActivity.this.promptFinish("onActivityResult 延时 finish");
+                    } catch (Throwable t) {
+                        showErrorDialog("onActivityResult.delayed 异常", t);
+                    }
                 }
             }, 200L);
         }
     }
 
     public void setResultData(int i, Intent intent) {
+        try {
+            doSetResultData(i, intent);
+        } catch (Throwable t) {
+            showErrorDialog("setResultData 异常", t);
+        }
+    }
+
+    private void doSetResultData(int i, Intent intent) {
         if (intent == null) {
             logDialog("openSDK_LOG.AssistActivity", "--setResultData--intent is null, setResult ACTIVITY_CANCEL");
             setResult(0);
@@ -415,14 +564,22 @@ public class AssistActivity extends Activity {
                 logDialog("openSDK_LOG.AssistActivity", "--setResultData--response is empty, setResult ACTIVITY_OK");
                 setResult(-1, intent);
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
             SLog.e("openSDK_LOG.AssistActivity", "--setResultData--parse response failed");
+            showErrorDialog("setResultData.parseResponse 异常", e);
             e.printStackTrace();
-            logDialog("openSDK_LOG.AssistActivity", "--setResultData--parse response failed: " + e.getMessage());
         }
     }
 
     private void a(Bundle bundle) {
+        try {
+            doABundle(bundle);
+        } catch (Throwable t) {
+            showErrorDialog("a(Bundle) 异常", t);
+        }
+    }
+
+    private void doABundle(Bundle bundle) {
         String str;
         String str2;
         String str3;
@@ -466,6 +623,14 @@ public class AssistActivity extends Activity {
 
         @Override
         public void onReceive(Context context, Intent intent) {
+            try {
+                doOnReceive(context, intent);
+            } catch (Throwable t) {
+                showErrorDialog("QQStayReceiver.onReceive 异常", t);
+            }
+        }
+
+        private void doOnReceive(Context context, Intent intent) {
             String str = "#";
             Intent intent2 = new Intent();
             intent2.putExtra("key_action", "action_share");
@@ -480,8 +645,8 @@ public class AssistActivity extends Activity {
                     intent2.putExtra(split[0], split[1]);
                 }
                 intent2.setData(uri);
-            } catch (Exception e) {
-                logDialog("openSDK_LOG.AssistActivity", "QQStayReceiver parse uri error : " + e.getMessage());
+            } catch (Throwable e) {
+                showErrorDialog("QQStayReceiver.parseUri 异常", e);
                 intent2.putExtra("result", "error");
                 intent2.putExtra("response", "parse error.");
             }

@@ -46,6 +46,11 @@ class MainActivity : AppCompatActivity() {
     /** StartAnyWhere 回调标志 */
     private val STARTANYWHERE_CALLBACK = "wnlz_startanywhere_callback"
 
+    /** 持久化文件名 */
+    private val PREFS_NAME = "wnlz_injector_prefs"
+    private val KEY_PACKAGE_NAME = "key_package_name"
+    private val KEY_INJECTION_METHOD = "key_injection_method"
+
     /** 加载对话框 */
     private var loadingDialog: Dialog? = null
 
@@ -64,11 +69,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 持久化（包名 + 注入方式） */
+    private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
+
+    private fun savePackageName(name: String) {
+        prefs.edit().putString(KEY_PACKAGE_NAME, name).apply()
+    }
+
+    private fun saveInjectionMethod(method: InjectionMethod) {
+        prefs.edit().putString(KEY_INJECTION_METHOD, method.name).apply()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
+
+        // 恢复持久化的包名与注入方式
+        val savedPackageName = prefs.getString(KEY_PACKAGE_NAME, "").orEmpty()
+        if (savedPackageName.isNotEmpty()) {
+            binding.etPackageName.setText(savedPackageName)
+            binding.etPackageName.setSelection(savedPackageName.length)
+        }
+        val savedMethodName = prefs.getString(KEY_INJECTION_METHOD, null)
+        if (savedMethodName != null) {
+            runCatching { InjectionMethod.valueOf(savedMethodName) }
+                .getOrNull()
+                ?.let { binding.methodSelector.setSelectedMethod(it) }
+        }
 
         // 包名输入框 —— 长按弹出非系统应用列表
         binding.etPackageName.setOnLongClickListener {
@@ -76,12 +105,13 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
-        // 包名输入框 —— 文本变化时自动检测版本号
+        // 包名输入框 —— 文本变化时自动检测版本号 + 持久化
         binding.etPackageName.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 val pkg = s?.toString()?.trim().orEmpty()
+                savePackageName(pkg)
                 if (pkg.isEmpty()) {
                     autoDetectedVersion = null
                     updateVersionMenuItem()
@@ -90,6 +120,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+
+        // 注入方式选择持久化
+        binding.methodSelector.setOnMethodSelectedListener { method ->
+            saveInjectionMethod(method)
+        }
 
         // 注入模块选择卡片 —— 点击弹出模块列表
         binding.cardModules.setOnClickListener { showModuleListDialog() }
@@ -729,9 +764,9 @@ class MainActivity : AppCompatActivity() {
                         android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
                     )
 
-                    // intent1: 指向本 app 内置的 AssistActivity（不再调用目标包的腾讯 SDK AssistActivity）
+                    // intent1: 指向用户输入目标包内的腾讯 SDK AssistActivity
                     val intent1 = Intent()
-                        .setComponent(ComponentName(packageName, "com.wunelezi.injector.AssistActivity"))
+                        .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
                     intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)

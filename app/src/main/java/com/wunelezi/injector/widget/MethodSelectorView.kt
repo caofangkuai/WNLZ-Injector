@@ -126,6 +126,18 @@ class MethodSelectorView @JvmOverloads constructor(
     /** 获取当前选中的注入方式 */
     fun getSelectedMethod(): InjectionMethod? = selectedMethod
 
+    /**
+     * 外部设置选中（用于从持久化中恢复选中状态）。
+     *
+     * 与用户手动选择路径不同：
+     *  - 不会弹出 "设备不支持" 确认框
+     *  - 不会触发 [onMethodSelectedListener]
+     */
+    fun setSelectedMethod(method: InjectionMethod?) {
+        selectedMethod = method
+        updateUI()
+    }
+
     /** 设置选中监听 */
     fun setOnMethodSelectedListener(listener: (InjectionMethod) -> Unit) {
         onMethodSelectedListener = listener

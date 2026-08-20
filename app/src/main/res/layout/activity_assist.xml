@@ -5,6 +5,7 @@
     - 实时显示 logcat 子进程的 stdout 流
     - 同时还承接 Activity 内部原本写在 logDialog / showErrorDialog 中的日志与异常
     - 底部一行操作按钮：跳到最底部、清屏
+    - [已移除] 不再有"自动跟随"逻辑，新日志不会自动滚到底部
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -40,18 +41,6 @@
         android:padding="6dp"
         android:background="#1B2026"
         android:gravity="end">
-
-        <TextView
-            android:id="@+id/tvBgScrollHint"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="start|center_vertical"
-            android:textColor="#7A8694"
-            android:textSize="11sp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:text="自动跟随" />
 
         <Button
             android:id="@+id/btnBgClearLog"

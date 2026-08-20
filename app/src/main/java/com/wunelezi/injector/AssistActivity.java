@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -175,6 +176,123 @@ public class AssistActivity extends Activity {
         });
     }
 
+    /**
+     * 在 startIntentSender / startIntentSenderForResult 执行前弹 dialog，
+     * 展示即将发起的 Intent / PendingIntent 详情，由用户点"执行"或"取消"。
+     */
+    private void showIntentDetailsDialog(final Intent intent, final PendingIntent pendingIntent,
+                                         final Runnable onConfirm, final Runnable onCancel) {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                final String details = describeIntent(intent, pendingIntent);
+                new AlertDialog.Builder(AssistActivity.this)
+                        .setTitle("Intent 详情（即将执行）")
+                        .setMessage(details)
+                        .setCancelable(false)
+                        .setPositiveButton("执行", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                if (onConfirm != null) onConfirm.run();
+                            }
+                        })
+                        .setNegativeButton("取消", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                if (onCancel != null) onCancel.run();
+                            }
+                        })
+                        .show();
+            }
+        });
+    }
+
+    /**
+     * 把 Intent 的关键字段（Component / Action / Data / Type / Categories / Extras / Flags）
+     * 以及 PendingIntent 的 creatorPackage、flags 格式化成可读文本。
+     */
+    private String describeIntent(Intent intent, PendingIntent pendingIntent) {
+        StringBuilder sb = new StringBuilder();
+        if (intent == null) {
+            sb.append("intent == null\n");
+        } else {
+            ComponentName cn = intent.getComponent();
+            sb.append("Component: ").append(cn != null ? cn.flattenToString() : "(无)").append("\n");
+            if (intent.getAction() != null) {
+                sb.append("Action: ").append(intent.getAction()).append("\n");
+            }
+            Uri data = intent.getData();
+            if (data != null) {
+                sb.append("Data: ").append(data.toString()).append("\n");
+            }
+            String type = intent.getType();
+            if (type != null) {
+                sb.append("Type: ").append(type).append("\n");
+            }
+            if (!intent.getCategories().isEmpty()) {
+                sb.append("Categories: ").append(intent.getCategories()).append("\n");
+            }
+            Bundle extras = intent.getExtras();
+            if (extras != null && !extras.isEmpty()) {
+                sb.append("\nExtras:\n");
+                for (String key : extras.keySet()) {
+                    Object v;
+                    try {
+                        v = extras.get(key);
+                    } catch (Throwable t) {
+                        v = "(get 异常: " + t.getMessage() + ")";
+                    }
+                    sb.append("  ").append(key).append(" = ");
+                    if (v == null) {
+                        sb.append("null\n");
+                    } else if (v instanceof Intent) {
+                        sb.append("(Intent) ").append(((Intent) v).toString()).append("\n");
+                    } else if (v instanceof Bundle) {
+                        sb.append("(Bundle) ").append(((Bundle) v).toString()).append("\n");
+                    } else if (v instanceof Uri) {
+                        sb.append(v.toString()).append("\n");
+                    } else if (v instanceof String[]) {
+                        sb.append(java.util.Arrays.toString((String[]) v)).append("\n");
+                    } else if (v instanceof boolean[]) {
+                        sb.append(java.util.Arrays.toString((boolean[]) v)).append("\n");
+                    } else if (v instanceof int[]) {
+                        sb.append(java.util.Arrays.toString((int[]) v)).append("\n");
+                    } else if (v instanceof long[]) {
+                        sb.append(java.util.Arrays.toString((long[]) v)).append("\n");
+                    } else if (v instanceof double[]) {
+                        sb.append(java.util.Arrays.toString((double[]) v)).append("\n");
+                    } else {
+                        sb.append(v.toString()).append("\n");
+                    }
+                }
+            }
+            sb.append("\nFlags: 0x").append(Integer.toHexString(intent.getFlags()));
+        }
+        if (pendingIntent != null) {
+            sb.append("\n\nPendingIntent:\n");
+            try {
+                sb.append("  creatorPackage: ").append(pendingIntent.getCreatorPackage()).append("\n");
+            } catch (Throwable ignored) {
+                sb.append("  creatorPackage: (获取失败)\n");
+            }
+            try {
+                sb.append("  creatorUid: ").append(pendingIntent.getCreatorUid()).append("\n");
+            } catch (Throwable ignored) {
+                sb.append("  creatorUid: (获取失败)\n");
+            }
+            sb.append("  isActivity: ").append(pendingIntent.isActivity()).append("\n");
+            sb.append("  isBroadcast: ").append(pendingIntent.isBroadcast()).append("\n");
+            sb.append("  isService: ").append(pendingIntent.isService()).append("\n");
+        }
+        return sb.toString();
+    }
+
     @Override
     protected void onCreate(Bundle bundle) {
         try {
@@ -221,13 +339,32 @@ public class AssistActivity extends Activity {
                     showErrorDialog("onCreate.registerReceiver 异常", t);
                 }
                 try {
-                    IntentSender intentSender = pendingIntent.getIntentSender();
-                    if (intent.getBooleanExtra("for_result", true)) {
-                        startIntentSenderForResult(intentSender, intExtra, null, 0, 0, 0);
-                    } else {
-                        startIntentSender(intentSender, null, 0, 0, 0);
-                    }
-                    a(intent, true);
+                    final IntentSender intentSender = pendingIntent.getIntentSender();
+                    final Intent finalIntent = intent;
+                    final int finalIntExtra = intExtra;
+                    final PendingIntent finalPendingIntent = pendingIntent;
+                    // 执行 startIntentSender* 前先弹 dialog 展示 intent 详情，
+                    // 用户确认后才真正发起 IntentSender / PendingIntent 授权流
+                    showIntentDetailsDialog(intent, pendingIntent, new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                if (finalIntent.getBooleanExtra("for_result", true)) {
+                                    startIntentSenderForResult(intentSender, finalIntExtra, null, 0, 0, 0);
+                                } else {
+                                    startIntentSender(intentSender, null, 0, 0, 0);
+                                }
+                                a(finalIntent, true);
+                            } catch (Throwable t) {
+                                showErrorDialog("startIntentSender* 异常", t);
+                            }
+                        }
+                    }, new Runnable() {
+                        @Override
+                        public void run() {
+                            logDialog("openSDK_LOG.AssistActivity", "用户取消执行 IntentSender");
+                        }
+                    });
                     return;
                 } catch (ActivityNotFoundException e2) {
                     logDialog("openSDK_LOG.AssistActivity", "--onCreate--startActivity exception, ActivityNotFoundException : " + e2);

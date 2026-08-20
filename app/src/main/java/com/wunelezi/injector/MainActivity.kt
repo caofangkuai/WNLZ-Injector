@@ -216,6 +216,10 @@ class MainActivity : AppCompatActivity() {
                 revokeAllPermissions()
                 true
             }
+            R.id.action_custom_intent -> {
+                showCustomIntentDialog()
+                true
+            }
             else -> super.onOptionsItemSelected(item)
         }
     }
@@ -632,6 +636,50 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, R.string.dialog_version_empty, Toast.LENGTH_SHORT).show()
                 }
                 updateVersionMenuItem()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    /**
+     * 通过自定义 intent scheme URI，借助 StartAnyWhere（系统账号认证注入）以系统身份启动目标 Activity
+     */
+    private fun showCustomIntentDialog() {
+        val input = com.google.android.material.textfield.TextInputEditText(this).apply {
+            hint = "intent://... 或 package:... 等 intent scheme"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            setSingleLine(false)
+            gravity = android.view.Gravity.START
+        }
+
+        val container = com.google.android.material.textfield.TextInputLayout(this).apply {
+            addView(input)
+            hint = "自定义 Intent Scheme URI"
+            setBoxStrokeColorStateList(
+                android.content.res.ColorStateList.valueOf(getColor(R.color.primary))
+            )
+            setPadding(48, 16, 48, 8)
+        }
+
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("自定义 Intent 启动")
+            .setMessage("输入 intent scheme URI（例如 intent://...#Intent;component=...;end），将以系统身份启动其中的目标 Activity。")
+            .setView(container)
+            .setPositiveButton(R.string.action_confirm) { _, _ ->
+                val uriStr = input.text?.toString()?.trim().orEmpty()
+                if (uriStr.isEmpty()) {
+                    Toast.makeText(this, "URI 不能为空", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                try {
+                    // 解析 intent scheme（兼容 intent:/package:/android-app:/http: 等）
+                    val targetIntent = Intent.parseUri(uriStr, Intent.URI_INTENT_SCHEME)
+                    targetIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, targetIntent)
+                    Toast.makeText(this, "已通过 StartAnyWhere 发起启动", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    showInjectErrorDialog(e)
+                }
             }
             .setNegativeButton(R.string.action_cancel, null)
             .show()

@@ -69,11 +69,22 @@ public class AssistActivity extends Activity {
     /** 背景滚动 TextView + ScrollView，本 Activity 的"实时日志窗"主体 */
     private TextView tvBg;
     private ScrollView scrollBg;
+    private android.widget.Button btnScrollToBottom;
+    private android.widget.Button btnClearLog;
+    private TextView tvBgScrollHint;
 
     /** logcat 子进程控制 */
     private Process logcatProc;
     private Thread logcatReader;
     private final AtomicBoolean logcatRunning = new AtomicBoolean(false);
+
+    /**
+     * 是否"跟随"到最新日志：
+     *  - 用户没滚走（停靠最底部）时，新日志追加会自动 fullScroll(FOCUS_DOWN)
+     *  - 用户向上滚动查看历史时，新日志不会顶动它；等用户点"↓ 跳到最新"或自己滚回去后才恢复跟随
+     *  - 用户点击"跳到最新"按钮后会强制开启跟随
+     */
+    private boolean stickyToBottom = true;
 
     public static Intent getAssistActivityIntent(Context context) {
         return new Intent(context, (Class<?>) AssistActivity.class);
@@ -101,6 +112,54 @@ public class AssistActivity extends Activity {
         }
     }
 
+    /**
+     * 判断 ScrollView 当前是否在最底部（容差 4 px，避免 onScrollChange 抖动）。
+     */
+    private boolean isScrolledToBottom() {
+        if (scrollBg == null) return true;
+        View child = scrollBg.getChildAt(0);
+        if (child == null) return true;
+        int scrollY = scrollBg.getScrollY();
+        int bottomEdge = child.getBottom() - (scrollBg.getHeight() - scrollBg.getPaddingTop() - scrollBg.getPaddingBottom());
+        return bottomEdge - scrollY <= 4;
+    }
+
+    private void updateBgScrollHint() {
+        if (tvBgScrollHint == null) return;
+        if (stickyToBottom) {
+            tvBgScrollHint.setText("自动跟随 · 新日志滚动到底");
+            tvBgScrollHint.setTextColor(0xFF7A8694);
+        } else {
+            tvBgScrollHint.setText("已暂停跟随 · 向上滚查看历史，点下方按钮跳回最新");
+            tvBgScrollHint.setTextColor(0xFFFFB300);
+        }
+    }
+
+    private void scrollBgToBottom() {
+        if (scrollBg == null) return;
+        scrollBg.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    scrollBg.fullScroll(View.FOCUS_DOWN);
+                } catch (Throwable ignored) {}
+            }
+        });
+    }
+
+    private void clearBgLog() {
+        if (tvBg == null) return;
+        tvBg.setText("");
+        appendBgLine("[已清屏] " + new java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(new java.util.Date()));
+        stickyToBottom = true;
+        updateBgScrollHint();
+    }
+
+    /**
+     * 真正把一行情本 append 到 TextView。
+     * - 超 MAX_BG_CHARS 时裁掉前半段（按行），保留最新
+     * - 是否滚到底部取决于 stickyToBottom：只有用户在最底部时才跟随新日志
+     */
     private void appendBgLineNow(String text) {
         try {
             // 全量 logcat 输出量巨大，超 MAX_BG_CHARS 时裁掉前半段（按行），保留最新
@@ -109,7 +168,6 @@ public class AssistActivity extends Activity {
                 int oversize = (cur.length() + text.length()) - MAX_BG_CHARS;
                 int targetLen = cur.length() - oversize;
                 if (targetLen < 0) targetLen = 0;
-                // 在 targetLen 之后找一个换行边界（避免把一行切成两半）
                 int cutFrom = targetLen;
                 int nextNl = -1;
                 int maxScan = Math.min(cur.length(), targetLen + 4096);
@@ -122,19 +180,14 @@ public class AssistActivity extends Activity {
                 if (nextNl > 0 && nextNl + 1 < cur.length()) {
                     cutFrom = nextNl + 1;
                 }
-                // 触发一次"截断提示"插入到内容前面
-                String notice = "[已自动截断 " + (cutFrom) + " 字符旧日志]\n";
+                String notice = "[已自动截断 " + cutFrom + " 字符旧日志]\n";
                 tvBg.setText(notice + cur.subSequence(cutFrom, cur.length()));
             }
             tvBg.append(text);
-            if (scrollBg != null) {
-                scrollBg.post(new Runnable() {
-                    @Override public void run() {
-                        try {
-                            scrollBg.fullScroll(View.FOCUS_DOWN);
-                        } catch (Throwable ignored) {}
-                    }
-                });
+
+            // [智能滚动] 只有 stickyToBottom=true 才自动跟随，否则保持原位置
+            if (stickyToBottom) {
+                scrollBgToBottom();
             }
         } catch (Throwable ignored) {}
     }
@@ -251,6 +304,53 @@ public class AssistActivity extends Activity {
             setContentView(R.layout.activity_assist);
             tvBg = (TextView) findViewById(R.id.tvAssistBg);
             scrollBg = (ScrollView) findViewById(R.id.scrollViewAssistBg);
+            tvBgScrollHint = (TextView) findViewById(R.id.tvBgScrollHint);
+            btnScrollToBottom = (android.widget.Button) findViewById(R.id.btnBgScrollToBottom);
+            btnClearLog = (android.widget.Button) findViewById(R.id.btnBgClearLog);
+
+            // [智能滚动] 监听 ScrollView 滚动：用户向上滚走历史时取消"跟随"，
+            // 用户自己滚回最底部时重新开启"跟随"。
+            if (scrollBg != null && android.os.Build.VERSION.SDK_INT >= 23) {
+                scrollBg.setOnScrollChangeListener(new View.OnScrollChangeListener() {
+                    @Override public void onScrollChange(View v, int scrollX, int scrollY, int oldScrollX, int oldScrollY) {
+                        boolean atBottom = isScrolledToBottom();
+                        if (atBottom && !stickyToBottom) {
+                            stickyToBottom = true;
+                            updateBgScrollHint();
+                        } else if (!atBottom && stickyToBottom) {
+                            stickyToBottom = false;
+                            updateBgScrollHint();
+                        }
+                    }
+                });
+            }
+
+            if (btnScrollToBottom != null) {
+                btnScrollToBottom.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        try {
+                            stickyToBottom = true;
+                            updateBgScrollHint();
+                            scrollBgToBottom();
+                            appendBgLine("[手动] 跳到最新");
+                        } catch (Throwable t) {
+                            appendBgError("跳到最新按钮 异常", t);
+                        }
+                    }
+                });
+            }
+            if (btnClearLog != null) {
+                btnClearLog.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        try {
+                            clearBgLog();
+                        } catch (Throwable t) {
+                            appendBgError("清屏按钮 异常", t);
+                        }
+                    }
+                });
+            }
+            updateBgScrollHint();
 
             appendBgLine("=== AssistActivity 启动 ===");
             appendBgLine("pid=" + android.os.Process.myPid()

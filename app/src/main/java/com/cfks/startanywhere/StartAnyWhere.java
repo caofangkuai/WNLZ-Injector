@@ -70,7 +70,7 @@ public class StartAnyWhere {
         }
         context.startActivity(new Intent()
                 .setClassName("android", "android.accounts.ChooseTypeAndAccountActivity")
-                .putExtra("allowableAccountTypes", new String[] {"com.wunelezi.injector.startanywhere.account"})
+                .putExtra("allowableAccountTypes", new String[] {"com.cfks.startanywhere.account"})
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         );
     }

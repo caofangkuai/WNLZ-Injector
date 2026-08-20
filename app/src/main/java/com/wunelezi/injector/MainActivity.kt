@@ -757,9 +757,6 @@ class MainActivity : AppCompatActivity() {
                             Intent.FLAG_ACTIVITY_NEW_TASK
                         )
                         .putExtra(STARTANYWHERE_CALLBACK, "true")
-                        .putExtra("key_request_code", 0x2782)
-                        .putExtra("appid", "1106798370")
-                        .putExtra("for_result", false)
 
                     // 创建 PendingIntent（基于合并后的 intent2）
                     val pendingIntent = android.app.PendingIntent.getActivity(
@@ -779,9 +776,8 @@ class MainActivity : AppCompatActivity() {
                         .setComponent(ComponentName(targetPackage, assistActivityCls))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)
+                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", Intent())
                     intent1.putExtra("key_extra_pending_intent", pendingIntent)
-                    intent1.putExtra("is_login", true)
 
                     runOnUiThread {
                         hideLoadingDialog()

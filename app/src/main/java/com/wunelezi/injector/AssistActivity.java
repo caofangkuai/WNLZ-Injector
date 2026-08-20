@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -17,6 +19,12 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.text.TextUtils;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.widget.Button;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
 import com.wunelezi.injector.tencent.log.SLog;
 import com.wunelezi.injector.tencent.open.b.h;
 import com.wunelezi.injector.tencent.connect.common.Constants;
@@ -26,6 +34,11 @@ import com.wunelezi.injector.tencent.tauth.UiError;
 import com.wunelezi.injector.tencent.tauth.UIListenerManager;
 import com.wunelezi.injector.tencent.open.utils.m;
 import org.json.JSONObject;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.InputStreamReader;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AssistActivity extends Activity {
     public static final String EXTRA_INTENT = "openSDK_LOG.AssistActivity.ExtraIntent";
@@ -54,8 +67,29 @@ public class AssistActivity extends Activity {
         return new Intent(context, (Class<?>) AssistActivity.class);
     }
 
+    // ==================== 工具方法 ====================
+
+    /**
+     * 把文本复制到剪贴板，并弹 Toast 提示。
+     */
+    private void copyToClipboard(String label, String text) {
+        try {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(ClipData.newPlainText(label == null ? "text" : label,
+                        text == null ? "" : text));
+                Toast.makeText(this, "已复制到剪贴板", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "剪贴板服务不可用", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Throwable t) {
+            showErrorDialog("复制失败", t);
+        }
+    }
+
     /**
      * 把原本的日志输出改成弹窗展示；同时保留 logcat 输出，方便调试。
+     * 使用可滚动 + 长按可复制 / 可点「查看 logcat」的布局。
      */
     private void logDialog(final String tag, final String msg) {
         SLog.i(tag, msg);
@@ -68,12 +102,8 @@ public class AssistActivity extends Activity {
                 if (isFinishing() || isDestroyed()) {
                     return;
                 }
-                new AlertDialog.Builder(AssistActivity.this)
-                        .setTitle(tag)
-                        .setMessage(msg)
-                        .setCancelable(true)
-                        .setPositiveButton(android.R.string.ok, null)
-                        .show();
+                String content = "[" + tag + "]\n" + (msg == null ? "" : msg);
+                showScrollableTextDialog(tag, content);
             }
         });
     }
@@ -81,6 +111,7 @@ public class AssistActivity extends Activity {
     /**
      * 通用异常弹窗：无论哪个方法里抛了 Throwable，都尽量用 dialog 反馈，
      * 避免崩溃导致 StartAnyWhere 流程中断后用户毫无线索。
+     * 走可滚动 + 长按可复制布局。
      */
     private void showErrorDialog(final String title, final Throwable t) {
         if (t == null) return;
@@ -99,16 +130,11 @@ public class AssistActivity extends Activity {
                 sb.append("错误信息: ").append(t.getMessage()).append("\n\n");
                 sb.append("堆栈:\n");
                 StackTraceElement[] stack = t.getStackTrace();
-                int n = Math.min(15, stack == null ? 0 : stack.length);
+                int n = Math.min(20, stack == null ? 0 : stack.length);
                 for (int i = 0; i < n; i++) {
                     sb.append("  at ").append(stack[i]).append("\n");
                 }
-                new AlertDialog.Builder(AssistActivity.this)
-                        .setTitle(title)
-                        .setMessage(sb.toString())
-                        .setCancelable(true)
-                        .setPositiveButton(android.R.string.ok, null)
-                        .show();
+                showScrollableTextDialog(title, sb.toString());
             }
         });
     }
@@ -134,22 +160,18 @@ public class AssistActivity extends Activity {
                 sb.append("错误信息: ").append(t.getMessage()).append("\n\n");
                 sb.append("堆栈:\n");
                 StackTraceElement[] stack = t.getStackTrace();
-                int n = Math.min(15, stack == null ? 0 : stack.length);
+                int n = Math.min(20, stack == null ? 0 : stack.length);
                 for (int i = 0; i < n; i++) {
                     sb.append("  at ").append(stack[i]).append("\n");
                 }
-                new AlertDialog.Builder(AssistActivity.this)
-                        .setTitle(title)
-                        .setMessage(sb.toString())
-                        .setCancelable(true)
-                        .setPositiveButton(android.R.string.ok, null)
-                        .show();
+                showScrollableTextDialog(title, sb.toString());
             }
         });
     }
 
     /**
      * 不再主动 finish()，改为弹出提示，由用户点"确认关闭"才真正结束 Activity。
+     * 走可滚动 + 长按可复制布局。
      */
     private void promptFinish(final String reason) {
         if (isFinishing() || isDestroyed()) {
@@ -161,24 +183,97 @@ public class AssistActivity extends Activity {
                 if (isFinishing() || isDestroyed()) {
                     return;
                 }
-                new AlertDialog.Builder(AssistActivity.this)
-                        .setTitle("finish() 被调用")
-                        .setMessage(reason)
-                        .setCancelable(false)
-                        .setPositiveButton("确认关闭", new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface dialog, int which) {
-                                AssistActivity.this.finish();
-                            }
-                        })
-                        .show();
+                showScrollableTextDialog("finish() 被调用（点确认关闭后才真正结束）", reason);
             }
         });
     }
 
     /**
+     * 通用「可滚动 + 长按可复制 + 可跳到 logcat」的弹窗。
+     * 关闭按钮会真正 finish() 当前 Activity。
+     */
+    private void showScrollableTextDialog(final String title, final String content) {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                final View view;
+                try {
+                    view = LayoutInflater.from(AssistActivity.this)
+                            .inflate(R.layout.dialog_scroll_text, null);
+                } catch (Throwable t) {
+                    showErrorDialog2(title, content, t);
+                    return;
+                }
+                final TextView tv = (TextView) view.findViewById(R.id.tvContent);
+                Button btnCopy = (Button) view.findViewById(R.id.btnCopy);
+                Button btnLogcat = (Button) view.findViewById(R.id.btnLogcat);
+                tv.setText(content == null ? "" : content);
+                tv.setOnLongClickListener(new View.OnLongClickListener() {
+                    @Override
+                    public boolean onLongClick(View v) {
+                        copyToClipboard(title, tv.getText().toString());
+                        return true;
+                    }
+                });
+                btnCopy.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        copyToClipboard(title, tv.getText().toString());
+                    }
+                });
+                final AlertDialog dialog = new AlertDialog.Builder(AssistActivity.this)
+                        .setTitle(title)
+                        .setView(view)
+                        .setCancelable(true)
+                        .setPositiveButton("确认关闭", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int which) {
+                                AssistActivity.this.finish();
+                            }
+                        })
+                        .create();
+                btnLogcat.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        try { dialog.dismiss(); } catch (Throwable ignored) {}
+                        showLogcatDialog();
+                    }
+                });
+                dialog.show();
+            }
+        });
+    }
+
+    /**
+     * 当自定义布局加载失败时的 fallback（直接用 setMessage）。
+     */
+    private void showErrorDialog2(String title, String content, Throwable t) {
+        if (isFinishing() || isDestroyed()) return;
+        try {
+            new AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setMessage(content + "\n\n[showScrollableTextDialog 异常: " + t + "]")
+                    .setCancelable(true)
+                    .setPositiveButton("确认关闭", new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface d, int which) {
+                            finish();
+                        }
+                    })
+                    .show();
+        } catch (Throwable ignored) {}
+    }
+
+    /**
      * 在 startIntentSender / startIntentSenderForResult 执行前弹 dialog，
      * 展示即将发起的 Intent / PendingIntent 详情，由用户点"执行"或"取消"。
+     * 走可滚动 + 长按可复制布局。
      */
     private void showIntentDetailsDialog(final Intent intent, final PendingIntent pendingIntent,
                                          final Runnable onConfirm, final Runnable onCancel) {
@@ -192,23 +287,70 @@ public class AssistActivity extends Activity {
                     return;
                 }
                 final String details = describeIntent(intent, pendingIntent);
-                new AlertDialog.Builder(AssistActivity.this)
+                final View view;
+                try {
+                    view = LayoutInflater.from(AssistActivity.this)
+                            .inflate(R.layout.dialog_scroll_text, null);
+                } catch (Throwable t) {
+                    new AlertDialog.Builder(AssistActivity.this)
+                            .setTitle("Intent 详情（即将执行）")
+                            .setMessage(details)
+                            .setCancelable(false)
+                            .setPositiveButton("执行", new DialogInterface.OnClickListener() {
+                                @Override public void onClick(DialogInterface d, int w) {
+                                    if (onConfirm != null) onConfirm.run();
+                                }
+                            })
+                            .setNegativeButton("取消", new DialogInterface.OnClickListener() {
+                                @Override public void onClick(DialogInterface d, int w) {
+                                    if (onCancel != null) onCancel.run();
+                                }
+                            })
+                            .show();
+                    return;
+                }
+                final TextView tv = (TextView) view.findViewById(R.id.tvContent);
+                Button btnCopy = (Button) view.findViewById(R.id.btnCopy);
+                Button btnLogcat = (Button) view.findViewById(R.id.btnLogcat);
+                tv.setText(details);
+                tv.setOnLongClickListener(new View.OnLongClickListener() {
+                    @Override
+                    public boolean onLongClick(View v) {
+                        copyToClipboard("intent_details", tv.getText().toString());
+                        return true;
+                    }
+                });
+                btnCopy.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        copyToClipboard("intent_details", tv.getText().toString());
+                    }
+                });
+                final AlertDialog dialog = new AlertDialog.Builder(AssistActivity.this)
                         .setTitle("Intent 详情（即将执行）")
-                        .setMessage(details)
+                        .setView(view)
                         .setCancelable(false)
                         .setPositiveButton("执行", new DialogInterface.OnClickListener() {
                             @Override
-                            public void onClick(DialogInterface dialog, int which) {
+                            public void onClick(DialogInterface d, int which) {
                                 if (onConfirm != null) onConfirm.run();
                             }
                         })
                         .setNegativeButton("取消", new DialogInterface.OnClickListener() {
                             @Override
-                            public void onClick(DialogInterface dialog, int which) {
+                            public void onClick(DialogInterface d, int which) {
                                 if (onCancel != null) onCancel.run();
                             }
                         })
-                        .show();
+                        .create();
+                btnLogcat.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        try { dialog.dismiss(); } catch (Throwable ignored) {}
+                        showLogcatDialog();
+                    }
+                });
+                dialog.show();
             }
         });
     }
@@ -292,6 +434,202 @@ public class AssistActivity extends Activity {
         }
         return sb.toString();
     }
+
+    // ==================== Logcat 实时抓取 ====================
+
+    /**
+     * 弹出「Logcat 输出」dialog：后台执行 logcat 子进程，捕获 stdout 实时追加。
+     * - 启动 / 停止：toggle 按钮
+     * - 清屏：清空 TextView
+     * - 复制：把 TextView 当前全部内容写入剪贴板
+     * - 保存文件：把 TextView 当前内容写到 app 外部文件目录
+     * - 关闭 dialog 时自动 stop & destroy 进程
+     */
+    private void showLogcatDialog() {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                final View view;
+                try {
+                    view = LayoutInflater.from(AssistActivity.this)
+                            .inflate(R.layout.dialog_logcat, null);
+                } catch (Throwable t) {
+                    new AlertDialog.Builder(AssistActivity.this)
+                            .setTitle("Logcat 输出")
+                            .setMessage("无法加载 dialog_logcat.xml: " + t)
+                            .setPositiveButton("关闭", null)
+                            .show();
+                    return;
+                }
+                final TextView tv = (TextView) view.findViewById(R.id.tvLogcat);
+                final ScrollView scroll = (ScrollView) view.findViewById(R.id.scrollViewLogcat);
+                final Button btnToggle = (Button) view.findViewById(R.id.btnToggleLogcat);
+                final Button btnClear = (Button) view.findViewById(R.id.btnClearLogcat);
+                final Button btnCopy = (Button) view.findViewById(R.id.btnCopyLogcat);
+                final Button btnExport = (Button) view.findViewById(R.id.btnExportLogcat);
+
+                tv.setOnLongClickListener(new View.OnLongClickListener() {
+                    @Override
+                    public boolean onLongClick(View v) {
+                        copyToClipboard("logcat", tv.getText().toString());
+                        return true;
+                    }
+                });
+
+                final AtomicBoolean running = new AtomicBoolean(false);
+                final Process[] proc = new Process[1];
+                final Thread[] reader = new Thread[1];
+
+                final Runnable doStart = new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!running.compareAndSet(false, true)) {
+                            return;
+                        }
+                        try {
+                            // 过滤：本 app 常用 tag + 致命错误
+                            String filter = "openSDK_LOG.AssistActivity:V " +
+                                    "MainActivity:V " +
+                                    "AndroidRuntime:E " +
+                                    "System.err:W *:S";
+                            proc[0] = Runtime.getRuntime().exec(
+                                    new String[]{"logcat", "-v", "time", filter});
+                            reader[0] = new Thread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    BufferedReader br = null;
+                                    try {
+                                        br = new BufferedReader(
+                                                new InputStreamReader(proc[0].getInputStream()));
+                                        String line;
+                                        while ((line = br.readLine()) != null) {
+                                            if (!running.get()) break;
+                                            final String l = line;
+                                            runOnUiThread(new Runnable() {
+                                                @Override
+                                                public void run() {
+                                                    tv.append(l);
+                                                    tv.append("\n");
+                                                    scroll.post(new Runnable() {
+                                                        @Override
+                                                        public void run() {
+                                                            scroll.fullScroll(View.FOCUS_DOWN);
+                                                        }
+                                                    });
+                                                }
+                                            });
+                                        }
+                                    } catch (Throwable t) {
+                                        final String msg = "[reader 异常: " + t + "]";
+                                        runOnUiThread(new Runnable() {
+                                            @Override
+                                                public void run() {
+                                                tv.append(msg);
+                                                tv.append("\n");
+                                            }
+                                        });
+                                    } finally {
+                                        if (br != null) {
+                                            try { br.close(); } catch (Throwable ignored) {}
+                                        }
+                                    }
+                                }
+                            }, "logcat-reader");
+                            reader[0].setDaemon(true);
+                            reader[0].start();
+                            btnToggle.setText("停止 logcat");
+                        } catch (Throwable t) {
+                            running.set(false);
+                            showErrorDialog("logcat 启动失败", t);
+                        }
+                    }
+                };
+
+                final Runnable doStop = new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!running.compareAndSet(true, false)) {
+                            return;
+                        }
+                        try {
+                            if (proc[0] != null) {
+                                proc[0].destroy();
+                            }
+                        } catch (Throwable ignored) {}
+                        if (reader[0] != null) {
+                            try { reader[0].interrupt(); } catch (Throwable ignored) {}
+                        }
+                        btnToggle.setText("启动 logcat");
+                    }
+                };
+
+                btnToggle.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        if (running.get()) doStop.run(); else doStart.run();
+                    }
+                });
+
+                btnClear.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        tv.setText("");
+                    }
+                });
+
+                btnCopy.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        copyToClipboard("logcat", tv.getText().toString());
+                    }
+                });
+
+                btnExport.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        try {
+                            File dir = getExternalFilesDir(null);
+                            if (dir == null) dir = getFilesDir();
+                            File out = new File(dir, "logcat_" + System.currentTimeMillis() + ".log");
+                            FileWriter fw = new FileWriter(out);
+                            try {
+                                fw.write(tv.getText().toString());
+                            } finally {
+                                try { fw.close(); } catch (Throwable ignored) {}
+                            }
+                            Toast.makeText(AssistActivity.this,
+                                    "已保存到 " + out.getAbsolutePath(),
+                                    Toast.LENGTH_LONG).show();
+                        } catch (Throwable t) {
+                            showErrorDialog("保存 logcat 失败", t);
+                        }
+                    }
+                });
+
+                final AlertDialog dialog = new AlertDialog.Builder(AssistActivity.this)
+                        .setTitle("Logcat 输出")
+                        .setView(view)
+                        .setCancelable(true)
+                        .setPositiveButton("关闭", null)
+                        .create();
+                dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+                    @Override
+                    public void onDismiss(DialogInterface d) {
+                        if (running.get()) doStop.run();
+                    }
+                });
+                dialog.show();
+            }
+        });
+    }
+
+    // ==================== Activity 生命周期 ====================
 
     @Override
     protected void onCreate(Bundle bundle) {

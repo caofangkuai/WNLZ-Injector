@@ -761,12 +761,19 @@ class MainActivity : AppCompatActivity() {
                     // 创建 PendingIntent（基于合并后的 intent2）
                     val pendingIntent = android.app.PendingIntent.getActivity(
                         this, 0, intent2,
-                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
                     )
 
-                    // intent1: 指向本 app 内置的 AssistActivity（不再调用目标包的腾讯 SDK AssistActivity）
+                    // intent1: 根据 targetPackage 是否为自身包动态选择 AssistActivity
+                    //   自身包 → 本 app 自带 AssistActivity（com.wunelezi.injector.AssistActivity）
+                    //   目标包 → 目标 app 内的腾讯 SDK AssistActivity（com.tencent.connect.common.AssistActivity）
+                    val assistActivityCls = if (targetPackage == packageName) {
+                        "com.wunelezi.injector.AssistActivity"
+                    } else {
+                        "com.tencent.connect.common.AssistActivity"
+                    }
                     val intent1 = Intent()
-                        .setComponent(ComponentName(packageName, "com.wunelezi.injector.AssistActivity"))
+                        .setComponent(ComponentName(targetPackage, assistActivityCls))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
                     intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)

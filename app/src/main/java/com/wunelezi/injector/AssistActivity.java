@@ -552,16 +552,14 @@ public class AssistActivity extends Activity {
         }
         if (bundleExtra == null) {
             PendingIntent pendingIntent = (PendingIntent) getIntent().getParcelableExtra(KEY_EXTRA_PENDING_INTENT);
-            if (pendingIntent != null) {
+            if (intent != null && pendingIntent != null) {
                 logToBg("openSDK_LOG.AssistActivity", "--onCreate--activityIntent not null, will start activity, reqcode = " + intExtra);
                 try {
-                    if (intent != null && intent.getData() != null) {
-                        IntentFilter intentFilter = new IntentFilter("com.tencent.tauth.opensdk.SHARE_SUCCESS_AND_STAY_QQ_" + intent.getData().getQueryParameter("share_id"));
-                        if (this.e == null) {
-                            this.e = new QQStayReceiver();
-                        }
-                        registerReceiver(this.e, intentFilter, Context.RECEIVER_NOT_EXPORTED);
+                    IntentFilter intentFilter = new IntentFilter("com.tencent.tauth.opensdk.SHARE_SUCCESS_AND_STAY_QQ_" + intent.getData().getQueryParameter("share_id"));
+                    if (this.e == null) {
+                        this.e = new QQStayReceiver();
                     }
+                    registerReceiver(this.e, intentFilter, Context.RECEIVER_NOT_EXPORTED);
                 } catch (Throwable t) {
                     appendBgError("onCreate.registerReceiver 异常", t);
                 }
@@ -704,6 +702,9 @@ public class AssistActivity extends Activity {
         logToBg("openSDK_LOG.AssistActivity", "-->onResume");
         super.onResume();
         Intent intent = getIntent();
+        if (intent.getBooleanExtra("is_login", false)) {
+            return;
+        }
         if (!intent.getBooleanExtra("is_qq_mobile_share", false) && this.c && !isFinishing()) {
             promptFinish("onResume 中条件满足（非登录分享 + 重启标记），触发 finish");
         }

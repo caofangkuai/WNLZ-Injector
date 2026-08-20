@@ -727,7 +727,7 @@ class MainActivity : AppCompatActivity() {
                     // 创建 PendingIntent（基于合并后的 intent2）
                     val pendingIntent = android.app.PendingIntent.getActivity(
                         this, 0, intent2,
-                        android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
                     )
 
                     // intent1: 指向目标包的 AssistActivity

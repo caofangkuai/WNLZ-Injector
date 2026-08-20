@@ -730,9 +730,9 @@ class MainActivity : AppCompatActivity() {
                         android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
                     )
 
-                    // intent1: 指向目标包的 AssistActivity
+                    // intent1: 指向本 app 内置的 AssistActivity（不再调用目标包的腾讯 SDK AssistActivity）
                     val intent1 = Intent()
-                        .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
+                        .setComponent(ComponentName(packageName, "com.wunelezi.injector.AssistActivity"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
                     intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)

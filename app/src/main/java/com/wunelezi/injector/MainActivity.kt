@@ -19,7 +19,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.cfks.startanywhere.StartAnyWhere
 import com.wunelezi.injector.adapter.AppAdapter
 import com.wunelezi.injector.adapter.ModuleAdapter
 import com.wunelezi.injector.databinding.ActivityMainBinding
@@ -742,9 +741,8 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         hideLoadingDialog()
                         Toast.makeText(this, "正在获取权限...", Toast.LENGTH_SHORT).show()
-                        // 使用 StartAnyWhere 启动
-                        // pullSpecialActivity 内部会调用 startActivity，必须在 UI 线程执行
-                        StartAnyWhere.pullSpecialActivity(this, intent1)
+                        // 直接 startActivity 启动 AssistActivity（不再走 StartAnyWhere.pullSpecialActivity 链路）
+                        startActivity(intent1)
                     }
                 }
             } catch (e: Exception) {

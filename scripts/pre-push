@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# pre-push hook: 拦截任何 tag push。
+# 项目约定：本仓库不再打 tag，所有版本号都在 commit 信息里描述。
+# 想绕过这个限制请用 `git push --no-verify`。
+#
+# 注意：本地 `git tag` 命令本身不会被拦截（git 没有原生 hook 拦截 tag 创建），
+# 所以本地打了 tag 也只能本地看到；如果想删本地 tag：`git tag -d <name>`。
+
+remote="$1"
+url="$2"
+
+# 检查 stdin 是否有带 refs/tags/* 的推送
+while read local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/tags/*)
+            echo "❌ 本仓库禁止打 tag（pre-push hook 拦截）"
+            echo "   被拦截的 ref: $remote_ref"
+            echo "   想忽略本 hook: git push --no-verify"
+            exit 1
+            ;;
+    esac
+done
+
+exit 0

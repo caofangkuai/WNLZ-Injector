@@ -16,7 +16,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.StyleSpan;
 import android.view.View;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -71,6 +75,7 @@ public class AssistActivity extends Activity {
     private ScrollView scrollBg;
     private android.widget.Button btnScrollToBottom;
     private android.widget.Button btnClearLog;
+    private android.widget.Button btnExportLog;
 
     /** logcat 子进程控制 */
     private Process logcatProc;
@@ -124,7 +129,8 @@ public class AssistActivity extends Activity {
     /**
      * 真正把一行情本 append 到 TextView。
      * - 超 MAX_BG_CHARS 时裁掉前半段（按行），保留最新
-     * - [已移除自动跟随] 新日志不会自动滚到底部；要看新内容请点底部「↓ 跳到最新」按钮
+     * - 新日志不会自动滚到底部；要看新内容请点底部「↓ 跳到最新」按钮
+     * - 调用 colorizeLine 给单行按日志级别上色
      */
     private void appendBgLineNow(String text) {
         try {
@@ -147,11 +153,211 @@ public class AssistActivity extends Activity {
                     cutFrom = nextNl + 1;
                 }
                 String notice = "[已自动截断 " + cutFrom + " 字符旧日志]\n";
+                // 重置内容时把已经丢掉的部分用无 Span 的纯文本写入，新追加的部分继续按级别上色
                 tvBg.setText(notice + cur.subSequence(cutFrom, cur.length()));
             }
-            tvBg.append(text);
+            // [高亮] 按日志级别给单行上色
+            tvBg.append(colorizeLine(text));
             // [不再自动滚动] 用户需要点「↓ 跳到最新」按钮才会滚到底部
         } catch (Throwable ignored) {}
+    }
+
+    /**
+     * 给一行日志按级别 / 关键字上色（高亮）。返回的是 CharSequence（可能是普通 String，也可能是 SpannableStringBuilder）。
+     *
+     * 识别规则（按匹配优先级）：
+     *  1. 自家 prefix：
+     *     - "[ERR ...]"          → 红色（异常）
+     *     - "[FINISH] ..."       → 橙色
+     *     - "[已自动截断 ...]"    → 暗灰
+     *     - "[Intent 详情 ...]"   → 蓝紫色
+     *     - "[手动] ..."         → 黄色
+     *  2. logcat threadtime 格式：MM-DD HH:MM:SS.mmm  PID  TID LEVEL TAG: MESSAGE
+     *     - E / F → 红色
+     *     - W     → 橙色
+     *     - I     → 浅蓝
+     *     - D     → 浅灰
+     *     - V / S → 默认
+     */
+    private static final int COLOR_DEFAULT   = 0xFFA9B7C6;
+    private static final int COLOR_LEVEL_V   = 0xFFA9B7C6;
+    private static final int COLOR_LEVEL_D   = 0xFF8C9AA8;
+    private static final int COLOR_LEVEL_I   = 0xFF6FB7E0;
+    private static final int COLOR_LEVEL_W   = 0xFFFFB300;
+    private static final int COLOR_LEVEL_E   = 0xFFFF5252;
+    private static final int COLOR_TRUNCATED = 0xFF555566;
+    private static final int COLOR_FINISH    = 0xFFFFB300;
+    private static final int COLOR_INTENT    = 0xFFB39DDB;
+    private static final int COLOR_MANUAL    = 0xFFFFE082;
+    private static final int COLOR_TAG       = 0xFFCE93D8;
+
+    private CharSequence colorizeLine(String line) {
+        if (line == null || line.length() == 0) return line == null ? "" : line;
+        SpannableStringBuilder ssb = new SpannableStringBuilder(line);
+        try {
+            // 自家 prefix 优先识别
+            if (startsWith(line, "[ERR ")) {
+                ssb.setSpan(new ForegroundColorSpan(COLOR_LEVEL_E), 0, line.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                return ssb;
+            }
+            if (startsWith(line, "[FINISH]")) {
+                ssb.setSpan(new ForegroundColorSpan(COLOR_FINISH), 0, line.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                return ssb;
+            }
+            if (startsWith(line, "[已自动截断")) {
+                ssb.setSpan(new ForegroundColorSpan(COLOR_TRUNCATED), 0, line.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                return ssb;
+            }
+            if (startsWith(line, "[Intent 详情")) {
+                ssb.setSpan(new ForegroundColorSpan(COLOR_INTENT), 0, line.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                return ssb;
+            }
+            if (startsWith(line, "[手动]")) {
+                ssb.setSpan(new ForegroundColorSpan(COLOR_MANUAL), 0, line.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                return ssb;
+            }
+
+            // logcat threadtime 格式：第 5 个 token 是 LEVEL（V/D/I/W/E/F/S）
+            String[] tokens = line.split("\\s+", 5);
+            if (tokens.length >= 5 && isLogcatTime(tokens[0]) && isPidTid(tokens[1], tokens[2])) {
+                char lvl = tokens[3].length() == 1 ? tokens[3].charAt(0) : 0;
+                int color;
+                switch (lvl) {
+                    case 'E': case 'F': case 'A': color = COLOR_LEVEL_E; break;
+                    case 'W':                       color = COLOR_LEVEL_W; break;
+                    case 'I':                       color = COLOR_LEVEL_I; break;
+                    case 'D':                       color = COLOR_LEVEL_D; break;
+                    default:                        color = COLOR_LEVEL_V; break;
+                }
+                // 给整行上底色
+                ssb.setSpan(new ForegroundColorSpan(color), 0, line.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                // 找第 5 字段的 TAG 部分，加一个稍微不同的颜色让它更显眼
+                int tagStart = -1, tagEnd = -1;
+                int idx = 0;
+                for (int i = 0; i < 4; i++) {
+                    int next = line.indexOf(' ', idx);
+                    if (next < 0) break;
+                    idx = next + 1;
+                }
+                tagStart = idx;
+                int colon = line.indexOf(':', tagStart);
+                if (colon > tagStart) {
+                    tagEnd = colon;
+                    ssb.setSpan(new ForegroundColorSpan(COLOR_TAG), tagStart, tagEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    ssb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD), tagStart, tagEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+                return ssb;
+            }
+        } catch (Throwable ignored) {
+            return line;
+        }
+        return ssb;
+    }
+
+    private static boolean startsWith(String s, String prefix) {
+        return s != null && prefix != null && s.length() >= prefix.length() && s.startsWith(prefix);
+    }
+
+    /** logcat 时间戳形如 "08-20 18:50:01.234"，但 splits 之后只有 "08-20" */
+    private static boolean isLogcatTime(String tok) {
+        if (tok == null || tok.length() != 5) return false;
+        if (tok.charAt(2) != '-') return false;
+        return isAsciiDigit(tok.charAt(0)) && isAsciiDigit(tok.charAt(1))
+                && isAsciiDigit(tok.charAt(3)) && isAsciiDigit(tok.charAt(4));
+    }
+
+    private static boolean isPidTid(String pid, String tid) {
+        return isAllDigits(pid) && isAllDigits(tid);
+    }
+
+    private static boolean isAllDigits(String s) {
+        if (s == null || s.length() == 0) return false;
+        for (int i = 0; i < s.length(); i++) {
+            if (!isAsciiDigit(s.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    private static boolean isAsciiDigit(char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    /**
+     * 把当前 TextView 全部内容写入一个时间戳命名的日志文件，并弹出系统分享面板。
+     * 默认写到 getExternalFilesDir(null)（不需要 WRITE_EXTERNAL_STORAGE 权限），
+     * 如果没插 SD 卡则回退到 getFilesDir()（应用私有目录）。
+     */
+    private void exportBgLogToFile() {
+        if (tvBg == null) return;
+        final String stamp = new java.text.SimpleDateFormat(
+                "yyyyMMdd-HHmmss", java.util.Locale.getDefault()).format(new java.util.Date());
+        final String fileName = "WNLZ-Injector-logcat-" + stamp + ".txt";
+        final String plain;
+        try {
+            // 导出纯文本：直接用 TextView 的纯文本（Spans 不会带出）
+            plain = tvBg.getText().toString();
+        } catch (Throwable t) {
+            appendBgError("导出日志：读取 TextView 内容失败", t);
+            return;
+        }
+        new Thread(new Runnable() {
+            @Override public void run() {
+                java.io.File target = null;
+                try {
+                    java.io.File dir = getExternalFilesDir(null);
+                    if (dir == null) {
+                        dir = getFilesDir();
+                    }
+                    if (dir != null && !dir.exists()) dir.mkdirs();
+                    target = new java.io.File(dir, fileName);
+                    java.io.FileWriter fw = new java.io.FileWriter(target, false);
+                    try {
+                        fw.write(plain);
+                    } finally {
+                        try { fw.close(); } catch (Throwable ignored) {}
+                    }
+                    final String finalPath = target.getAbsolutePath();
+                    final java.io.File finalTarget = target;
+                    appendBgLine("[导出] 写入文件成功：" + finalPath + "（" + plain.length() + " 字符）");
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            try {
+                                Toast.makeText(AssistActivity.this,
+                                        "已导出日志到：" + finalPath,
+                                        Toast.LENGTH_LONG).show();
+                                Intent share = new Intent(Intent.ACTION_SEND);
+                                share.setType("text/plain");
+                                share.putExtra(Intent.EXTRA_STREAM,
+                                        android.net.Uri.fromFile(finalTarget));
+                                share.putExtra(Intent.EXTRA_SUBJECT,
+                                        "WNLZ-Injector logcat " + stamp);
+                                share.putExtra(Intent.EXTRA_TEXT,
+                                        "WNLZ-Injector logcat " + stamp
+                                                + "\n" + finalPath
+                                                + "\n共 " + plain.length() + " 字符");
+                                Intent chooser = Intent.createChooser(share, "分享导出的日志");
+                                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                startActivity(chooser);
+                            } catch (Throwable t) {
+                                appendBgError("导出日志：弹分享面板失败", t);
+                                Toast.makeText(AssistActivity.this,
+                                        "已写入文件，但弹分享面板失败：" + t.getMessage(),
+                                        Toast.LENGTH_LONG).show();
+                            }
+                        }
+                    });
+                } catch (Throwable t) {
+                    appendBgError("导出日志失败", t);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            Toast.makeText(AssistActivity.this,
+                                    "导出日志失败：" + t.getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
+            }
+        }, "assist-bg-export").start();
     }
 
     /**
@@ -268,8 +474,8 @@ public class AssistActivity extends Activity {
             scrollBg = (ScrollView) findViewById(R.id.scrollViewAssistBg);
             btnScrollToBottom = (android.widget.Button) findViewById(R.id.btnBgScrollToBottom);
             btnClearLog = (android.widget.Button) findViewById(R.id.btnBgClearLog);
+            btnExportLog = (android.widget.Button) findViewById(R.id.btnBgExportLog);
 
-            // [已移除自动跟随] 新日志不会自动滚到底部；用户需要看新内容时点底部「↓ 跳到最新」即可
             if (btnScrollToBottom != null) {
                 btnScrollToBottom.setOnClickListener(new View.OnClickListener() {
                     @Override public void onClick(View v) {
@@ -289,6 +495,17 @@ public class AssistActivity extends Activity {
                             clearBgLog();
                         } catch (Throwable t) {
                             appendBgError("清屏按钮 异常", t);
+                        }
+                    }
+                });
+            }
+            if (btnExportLog != null) {
+                btnExportLog.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        try {
+                            exportBgLogToFile();
+                        } catch (Throwable t) {
+                            appendBgError("导出日志按钮 异常", t);
                         }
                     }
                 });

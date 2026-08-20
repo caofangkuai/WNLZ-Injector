@@ -2,10 +2,9 @@
 <!--
     AssistActivity 的"背景滚动 TextView"布局：
     - 整个 Activity 的窗口就是一个大 TextView，外面包 ScrollView 用于滚动查看
-    - 实时显示 logcat 子进程的 stdout 流
+    - 实时显示 logcat 子进程的 stdout 流（带级别高亮：E/F 红，W 橙，I 蓝，D 灰，V 默认）
     - 同时还承接 Activity 内部原本写在 logDialog / showErrorDialog 中的日志与异常
-    - 底部一行操作按钮：跳到最底部、清屏
-    - [已移除] 不再有"自动跟随"逻辑，新日志不会自动滚到底部
+    - 底部一行操作按钮：导出日志、清屏、跳到最底部
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -41,6 +40,13 @@
         android:padding="6dp"
         android:background="#1B2026"
         android:gravity="end">
+
+        <Button
+            android:id="@+id/btnBgExportLog"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:text="导出日志" />
 
         <Button
             android:id="@+id/btnBgClearLog"

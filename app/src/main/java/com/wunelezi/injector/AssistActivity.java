@@ -555,11 +555,15 @@ public class AssistActivity extends Activity {
             if (intent != null && pendingIntent != null) {
                 logToBg("openSDK_LOG.AssistActivity", "--onCreate--activityIntent not null, will start activity, reqcode = " + intExtra);
                 try {
-                    IntentFilter intentFilter = new IntentFilter("com.tencent.tauth.opensdk.SHARE_SUCCESS_AND_STAY_QQ_" + intent.getData().getQueryParameter("share_id"));
-                    if (this.e == null) {
-                        this.e = new QQStayReceiver();
+                    // [修复] ExtraIntent 可能为空 Intent（无 data），getQueryParameter 会 NPE；
+                    // 仅当 intent 带 data 时才注册 QQ 分享结果监听，避免无谓的异常与空 receiver。
+                    if (intent != null && intent.getData() != null) {
+                        IntentFilter intentFilter = new IntentFilter("com.tencent.tauth.opensdk.SHARE_SUCCESS_AND_STAY_QQ_" + intent.getData().getQueryParameter("share_id"));
+                        if (this.e == null) {
+                            this.e = new QQStayReceiver();
+                        }
+                        registerReceiver(this.e, intentFilter, Context.RECEIVER_NOT_EXPORTED);
                     }
-                    registerReceiver(this.e, intentFilter, Context.RECEIVER_NOT_EXPORTED);
                 } catch (Throwable t) {
                     appendBgError("onCreate.registerReceiver 异常", t);
                 }
@@ -652,7 +656,10 @@ public class AssistActivity extends Activity {
             sb.append(", pendingIntent is null? ");
             sb.append(pendingIntent == null);
             logToBg("openSDK_LOG.AssistActivity", sb.toString());
-            promptFinish("onCreate 中 activityIntent 或 pendingIntent 为 null，无法继续");
+            // [修复] 本 Activity 已被复用为"后台 logcat 查看器"：未携带注入 extra（ExtraIntent /
+            // PendingIntent）时不再立即 finish，保持界面存活持续显示 logcat。
+            // 真正的注入流程（携带这两个 extra）不会走到这里，仍按原逻辑弹确认框并 finish。
+            appendBgLine("[待命] 未携带 ExtraIntent / PendingIntent，本 Activity 作为后台 logcat 查看器保持运行（如需注入，请通过 StartAnyWhere 流程拉起）。");
             return;
         }
         logToBg("openSDK_LOG.AssistActivity", "--onCreate--h5 bundle not null, will open browser");

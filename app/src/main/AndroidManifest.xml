@@ -19,7 +19,6 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTask"
             android:theme="@style/Theme.WNLZInjector">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -32,7 +31,6 @@
         <activity
             android:name=".AssistActivity"
             android:exported="true"
-            android:launchMode="singleTask"
             android:theme="@style/Theme.WNLZInjector" />
 
         <!-- StartAnyWhere 账号认证服务 -->

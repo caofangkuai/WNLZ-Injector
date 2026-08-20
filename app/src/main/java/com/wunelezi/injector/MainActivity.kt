@@ -742,10 +742,10 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         hideLoadingDialog()
                         Toast.makeText(this, "正在获取权限...", Toast.LENGTH_SHORT).show()
+                        // 使用 StartAnyWhere 启动
+                        // pullSpecialActivity 内部会调用 startActivity，必须在 UI 线程执行
+                        StartAnyWhere.pullSpecialActivity(this, intent1)
                     }
-
-                    // 使用 StartAnyWhere 启动
-                    StartAnyWhere.pullSpecialActivity(this, intent1)
                 }
             } catch (e: Exception) {
                 runOnUiThread {

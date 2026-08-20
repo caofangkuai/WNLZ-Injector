@@ -31,9 +31,13 @@ android {
             signingConfig signingConfigs.release
         }
         release {
-            // 开启代码压缩与资源精简：仅打包实际用到的 res 资源
+            // 开启代码压缩（minify），但关闭资源精简（shrinkResources）。
+            // 原因：authenticator.xml 仅被 AndroidManifest 的 meta-data 引用、Java 代码从不引用
+            // R.xml.authenticator，shrinkResources 会误判为“未使用”而物理删除，导致 AuthService
+            // 无法被系统注册为 AccountAuthenticator，进而 StartAnyWhere 的 addAccount 回调永不触发、
+            // 任意 Activity 无法被系统拉起（已确认旧 release 包内 res/xml 整个缺失）。
             minifyEnabled true
-            shrinkResources true
+            shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

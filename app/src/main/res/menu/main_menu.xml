@@ -11,6 +11,6 @@
         app:showAsAction="never" />
     <item
         android:id="@+id/action_custom_intent"
-        android:title="自定义 Intent"
+        android:title="注入参数开关"
         app:showAsAction="never" />
 </menu>

@@ -60,8 +60,8 @@ class MainActivity : AppCompatActivity() {
     private val PREFS_NAME = "wnlz_injector_prefs"
     private val KEY_PACKAGE_NAME = "key_package_name"
     private val KEY_INJECTION_METHOD = "key_injection_method"
-    private val KEY_CUSTOM_INTENT_URI = "key_custom_intent_uri"
-    private val KEY_CUSTOM_INTENT_PARAMS = "key_custom_intent_params"
+    /** 注入 intent1/intent2 各 extra 的开关状态（key -> 是否启用） */
+    private val KEY_INJECT_PARAM_ENABLED = "key_inject_param_enabled"
 
     /** 加载对话框 */
     private var loadingDialog: Dialog? = null
@@ -654,174 +654,88 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 通过自定义 intent scheme URI，借助 StartAnyWhere（系统账号认证注入）以系统身份启动目标 Activity
+     * 注入 Intent 参数开关
+     *
+     * 将「自定义 Intent」改为：以开关（Switch）逐个控制注入时
+     * intent1 / intent2 各自附带的 extra 是否生效。
      */
-    /** 自定义 Intent 附带的参数（用于界面编辑与持久化） */
-    private data class ExtraParam(var key: String, var value: String, var type: String)
+    private data class InjectParamDef(val group: String, val key: String, val label: String)
 
+    /** 注入流程中可被单独开关的 extras（顺序即界面展示顺序） */
+    private val INJECT_PARAM_DEFS = listOf(
+        InjectParamDef("intent1", "openSDK_LOG.AssistActivity.ExtraIntent", "intent1 · ExtraIntent(intent2)"),
+        InjectParamDef("intent1", "key_extra_pending_intent", "intent1 · PendingIntent"),
+        InjectParamDef("intent1", "is_login", "intent1 · is_login"),
+        InjectParamDef("intent2", STARTANYWHERE_CALLBACK, "intent2 · callback"),
+        InjectParamDef("intent2", "key_request_code", "intent2 · key_request_code"),
+        InjectParamDef("intent2", "appid", "intent2 · appid"),
+        InjectParamDef("intent2", "for_result", "intent2 · for_result"),
+    )
+
+    /** 读取某 extra 的开关状态（默认开启） */
+    private fun isInjectParamEnabled(key: String): Boolean {
+        val map = org.json.JSONObject(prefs.getString(KEY_INJECT_PARAM_ENABLED, "{}").orEmpty())
+        return if (map.has(key)) map.getBoolean(key) else true
+    }
+
+    /** 持久化某 extra 的开关状态 */
+    private fun saveInjectParamEnabled(key: String, enabled: Boolean) {
+        val map = org.json.JSONObject(prefs.getString(KEY_INJECT_PARAM_ENABLED, "{}").orEmpty())
+        map.put(key, enabled)
+        prefs.edit().putString(KEY_INJECT_PARAM_ENABLED, map.toString()).apply()
+    }
+
+    /**
+     * 自定义 Intent 对话框：以开关形式控制注入 intent1 / intent2 各自附带的每个 extra。
+     * 开关状态即时持久化，点击注入按钮时按开关组装 intent。
+     */
     private fun showCustomIntentDialog() {
         val ctx = this
-        // 恢复持久化的 URI 与附带参数
-        val savedUri = prefs.getString(KEY_CUSTOM_INTENT_URI, "").orEmpty()
-        val params = loadCustomIntentParams()
-
-        val uriInput = com.google.android.material.textfield.TextInputEditText(ctx).apply {
-            hint = "intent://... 或 package:... 等 intent scheme"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            setSingleLine(false)
-            gravity = android.view.Gravity.START
-            setText(savedUri)
-        }
-        val uriLayout = com.google.android.material.textfield.TextInputLayout(ctx).apply {
-            addView(uriInput)
-            hint = "自定义 Intent Scheme URI"
-            setBoxStrokeColorStateList(
-                android.content.res.ColorStateList.valueOf(getColor(R.color.primary))
-            )
-            setPadding(48, 16, 48, 8)
-        }
-
-        // 附带参数列表容器（可滚动）
-        val paramsContainer = android.widget.LinearLayout(ctx).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-        }
-        val paramsScroll = android.widget.ScrollView(ctx).apply {
-            addView(paramsContainer)
-            setPadding(48, 8, 48, 8)
-        }
-
-        // 构建一行「key / value / 类型 / 删除」
-        fun buildRow(p: ExtraParam) {
-            val row = android.widget.LinearLayout(ctx).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                setPadding(0, 4, 0, 4)
-            }
-            val keyEt = android.widget.EditText(ctx).apply {
-                hint = "key"
-                setText(p.key)
-                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            val valEt = android.widget.EditText(ctx).apply {
-                hint = "value"
-                setText(p.value)
-                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            val typeSpinner = android.widget.Spinner(ctx).apply {
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                adapter = android.widget.ArrayAdapter(
-                    ctx, android.R.layout.simple_spinner_item, arrayOf("String", "Int", "Boolean")
-                ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-                setSelection(when (p.type) { "Int" -> 1; "Boolean" -> 2; else -> 0 })
-            }
-            val delBtn = android.widget.ImageButton(ctx).apply {
-                setImageResource(android.R.drawable.ic_menu_delete)
-                contentDescription = "删除"
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                setOnClickListener { params.remove(p); paramsContainer.removeView(row) }
-            }
-            keyEt.addTextChangedListener(object : android.text.TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, c: Int, a: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, b: Int, c: Int) { p.key = s?.toString().orEmpty() }
-                override fun afterTextChanged(s: android.text.Editable?) {}
-            })
-            valEt.addTextChangedListener(object : android.text.TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, c: Int, a: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, b: Int, c: Int) { p.value = s?.toString().orEmpty() }
-                override fun afterTextChanged(s: android.text.Editable?) {}
-            })
-            typeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, pos: Int, id: Long) {
-                    p.type = arrayOf("String", "Int", "Boolean")[pos]
-                }
-                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-            }
-            row.addView(keyEt)
-            row.addView(valEt)
-            row.addView(typeSpinner)
-            row.addView(delBtn)
-            paramsContainer.addView(row)
-        }
-
-        params.forEach { buildRow(it) }
-
-        val addBtn = android.widget.Button(ctx).apply {
-            text = "添加附带参数"
-            setPadding(48, 8, 48, 8)
-            setOnClickListener { val np = ExtraParam("", "", "String"); params.add(np); buildRow(np) }
-        }
 
         val root = android.widget.LinearLayout(ctx).apply {
             orientation = android.widget.LinearLayout.VERTICAL
-            addView(uriLayout)
-            addView(paramsScroll)
-            addView(addBtn)
+            setPadding(48, 16, 48, 16)
         }
+
+        var currentGroup = ""
+        for (def in INJECT_PARAM_DEFS) {
+            if (def.group != currentGroup) {
+                currentGroup = def.group
+                root.addView(android.widget.TextView(ctx).apply {
+                    text = if (def.group == "intent1") "intent1 附带参数" else "intent2 附带参数"
+                    textSize = 14f
+                    setPadding(0, 16, 0, 4)
+                    setTextColor(getColor(R.color.text_primary))
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                })
+            }
+            val row = android.widget.LinearLayout(ctx).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, 6, 0, 6)
+            }
+            val label = android.widget.TextView(ctx).apply {
+                text = def.label
+                textSize = 13f
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val sw = android.widget.Switch(ctx).apply {
+                isChecked = isInjectParamEnabled(def.key)
+                setOnCheckedChangeListener { _, checked -> saveInjectParamEnabled(def.key, checked) }
+            }
+            row.addView(label)
+            row.addView(sw)
+            root.addView(row)
+        }
+
+        val scroll = android.widget.ScrollView(ctx).apply { addView(root) }
 
         com.google.android.material.dialog.MaterialAlertDialogBuilder(ctx)
-            .setTitle("自定义 Intent 启动")
-            .setMessage("输入 intent scheme URI，并选择要附带的 Intent 参数（extra），将以系统身份启动目标 Activity。配置会自动保存。")
-            .setView(root)
-            .setPositiveButton(R.string.action_confirm) { _, _ ->
-                val uriStr = uriInput.text?.toString()?.trim().orEmpty()
-                if (uriStr.isEmpty()) {
-                    Toast.makeText(ctx, "URI 不能为空", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                try {
-                    // 解析 intent scheme（兼容 intent:/package:/android-app:/http: 等）
-                    val targetIntent = Intent.parseUri(uriStr, Intent.URI_INTENT_SCHEME)
-                    targetIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    // 附加用户选择的 intent 参数
-                    for (p in params) {
-                        if (p.key.isBlank()) continue
-                        when (p.type) {
-                            "Int" -> targetIntent.putExtra(p.key, p.value.toIntOrNull() ?: 0)
-                            "Boolean" -> targetIntent.putExtra(p.key, p.value.equals("true", true))
-                            else -> targetIntent.putExtra(p.key, p.value)
-                        }
-                    }
-                    // 持久化 URI 与参数
-                    prefs.edit().putString(KEY_CUSTOM_INTENT_URI, uriStr).apply()
-                    saveCustomIntentParams(params)
-                    com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(ctx, targetIntent)
-                    Toast.makeText(ctx, "已通过 StartAnyWhere 发起启动", Toast.LENGTH_SHORT).show()
-                } catch (e: Exception) {
-                    showInjectErrorDialog(e)
-                }
-            }
-            .setNegativeButton(R.string.action_cancel, null)
+            .setTitle("注入 Intent 参数开关")
+            .setMessage("开启 / 关闭注入时 intent1 与 intent2 各自附带的 extra。开关即时保存，点击注入按钮时按此生效。")
+            .setView(scroll)
+            .setPositiveButton(R.string.action_confirm, null)
             .show()
-    }
-
-    /** 读取持久化的自定义 Intent 附带参数 */
-    private fun loadCustomIntentParams(): MutableList<ExtraParam> {
-        val arr = org.json.JSONArray(prefs.getString(KEY_CUSTOM_INTENT_PARAMS, "[]").orEmpty())
-        val list = mutableListOf<ExtraParam>()
-        for (i in 0 until arr.length()) {
-            val o = arr.getJSONObject(i)
-            list.add(ExtraParam(o.optString("key"), o.optString("value"), o.optString("type", "String")))
-        }
-        return list
-    }
-
-    /** 保存自定义 Intent 附带参数（忽略 key 为空的行） */
-    private fun saveCustomIntentParams(params: List<ExtraParam>) {
-        val arr = org.json.JSONArray()
-        for (p in params) {
-            if (p.key.isBlank()) continue
-            val o = org.json.JSONObject()
-            o.put("key", p.key)
-            o.put("value", p.value)
-            o.put("type", p.type)
-            arr.put(o)
-        }
-        prefs.edit().putString(KEY_CUSTOM_INTENT_PARAMS, arr.toString()).apply()
     }
 
     // ==================== 注入按钮逻辑 ====================
@@ -943,10 +857,10 @@ class MainActivity : AppCompatActivity() {
                             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
                             Intent.FLAG_ACTIVITY_NEW_TASK
                         )
-                        .putExtra(STARTANYWHERE_CALLBACK, "true")
-                        .putExtra("key_request_code", 0x2782)
-                        .putExtra("appid", "1106798370")
-                        .putExtra("for_result", false)
+                    if (isInjectParamEnabled(STARTANYWHERE_CALLBACK)) intent2.putExtra(STARTANYWHERE_CALLBACK, "true")
+                    if (isInjectParamEnabled("key_request_code")) intent2.putExtra("key_request_code", 0x2782)
+                    if (isInjectParamEnabled("appid")) intent2.putExtra("appid", "1106798370")
+                    if (isInjectParamEnabled("for_result")) intent2.putExtra("for_result", false)
 
                     // 创建 PendingIntent（基于合并后的 intent2）
                     val pendingIntent = android.app.PendingIntent.getActivity(
@@ -966,9 +880,9 @@ class MainActivity : AppCompatActivity() {
                         .setComponent(ComponentName(targetPackage, assistActivityCls))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-                    intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)
-                    intent1.putExtra("key_extra_pending_intent", pendingIntent)
-                    intent1.putExtra("is_login", true)
+                    if (isInjectParamEnabled("openSDK_LOG.AssistActivity.ExtraIntent")) intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)
+                    if (isInjectParamEnabled("key_extra_pending_intent")) intent1.putExtra("key_extra_pending_intent", pendingIntent)
+                    if (isInjectParamEnabled("is_login")) intent1.putExtra("is_login", true)
 
                     runOnUiThread {
                         hideLoadingDialog()

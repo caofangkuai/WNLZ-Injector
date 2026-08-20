@@ -743,9 +743,12 @@ class MainActivity : AppCompatActivity() {
                         return@Thread
                     }
 
-                    // intent2: 合并原 intent2（系统设置主页 + 授权 flags）与原 extraIntent（分享请求参数）
+                    // intent2: 合并「自身 MainActivity + 授权 flags」与「分享请求参数」，
+                    // 作为 PendingIntent 与 ExtraIntent 的统一载体。
+                    // PendingIntent 触发时不再跳到系统设置，而是回到本 app 的 MainActivity，
+                    // 由 MainActivity 的 onActivityResult 拿到 URI 授权结果（FLAG_GRANT_* 仍然有效）。
                     val intent2 = Intent()
-                        .setComponent(ComponentName("com.android.settings", "com.android.settings.Settings"))
+                        .setComponent(ComponentName(packageName, "com.wunelezi.injector.MainActivity"))
                         .setDataAndType(dexUri, mimeType)
                         .addFlags(
                             Intent.FLAG_GRANT_READ_URI_PERMISSION or

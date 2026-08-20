@@ -1,10 +1,12 @@
 package com.wunelezi.injector;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentSender;
@@ -37,8 +39,8 @@ public class AssistActivity extends Activity {
         @Override
         public void handleMessage(Message message) {
             if (message.what == 0 && !AssistActivity.this.isFinishing()) {
-                SLog.w("openSDK_LOG.AssistActivity", "-->finish by timeout");
-                AssistActivity.this.finish();
+                logDialog("openSDK_LOG.AssistActivity", "-->finish by timeout");
+                AssistActivity.this.promptFinish("超时触发 finish（timeout）");
             }
         }
     };
@@ -47,16 +49,69 @@ public class AssistActivity extends Activity {
         return new Intent(context, (Class<?>) AssistActivity.class);
     }
 
+    /**
+     * 把原本的日志输出改成弹窗展示；同时保留 logcat 输出，方便调试。
+     */
+    private void logDialog(final String tag, final String msg) {
+        SLog.i(tag, msg);
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                new AlertDialog.Builder(AssistActivity.this)
+                        .setTitle(tag)
+                        .setMessage(msg)
+                        .setCancelable(true)
+                        .setPositiveButton(android.R.string.ok, null)
+                        .show();
+            }
+        });
+    }
+
+    /**
+     * 不再主动 finish()，改为弹出提示，由用户点“确认关闭”才真正结束 Activity。
+     */
+    private void promptFinish(final String reason) {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || isDestroyed()) {
+                    return;
+                }
+                new AlertDialog.Builder(AssistActivity.this)
+                        .setTitle("finish() 被调用")
+                        .setMessage(reason)
+                        .setCancelable(false)
+                        .setPositiveButton("确认关闭", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                AssistActivity.this.finish();
+                            }
+                        })
+                        .show();
+            }
+        });
+    }
+
     @Override
     protected void onCreate(Bundle bundle) {
         getWindow().addFlags(0x04000000);
         requestWindowFeature(1);
         super.onCreate(bundle);
         this.f = getIntent().getBooleanExtra(Constants.KEY_RESTORE_LANDSCAPE, false);
-        SLog.i("openSDK_LOG.AssistActivity", "--onCreate-- mRestoreLandscape=" + this.f);
+        logDialog("openSDK_LOG.AssistActivity", "--onCreate-- mRestoreLandscape=" + this.f);
         if (getIntent() == null) {
-            SLog.e("openSDK_LOG.AssistActivity", "-->onCreate--getIntent() returns null");
-            finish();
+            logDialog("openSDK_LOG.AssistActivity", "-->onCreate--getIntent() returns null");
+            promptFinish("onCreate 中 getIntent() 为 null");
+            return;
         }
         Intent intent = (Intent) getIntent().getParcelableExtra(EXTRA_INTENT);
         int intExtra = intent == null ? 0 : intent.getIntExtra("key_request_code", 0);
@@ -67,13 +122,13 @@ public class AssistActivity extends Activity {
             this.a = bundle.getBoolean("RESUME_FLAG", false);
         }
         if (this.c) {
-            SLog.d("openSDK_LOG.AssistActivity", "is restart");
+            logDialog("openSDK_LOG.AssistActivity", "is restart");
             return;
         }
         if (bundleExtra == null) {
             PendingIntent pendingIntent = (PendingIntent) getIntent().getParcelableExtra(KEY_EXTRA_PENDING_INTENT);
             if (intent != null && pendingIntent != null) {
-                SLog.i("openSDK_LOG.AssistActivity", "--onCreate--activityIntent not null, will start activity, reqcode = " + intExtra);
+                logDialog("openSDK_LOG.AssistActivity", "--onCreate--activityIntent not null, will start activity, reqcode = " + intExtra);
                 try {
                     IntentFilter intentFilter = new IntentFilter("com.tencent.tauth.opensdk.SHARE_SUCCESS_AND_STAY_QQ_" + intent.getData().getQueryParameter("share_id"));
                     if (this.e == null) {
@@ -81,7 +136,7 @@ public class AssistActivity extends Activity {
                     }
                     registerReceiver(this.e, intentFilter, Context.RECEIVER_NOT_EXPORTED);
                 } catch (Exception e) {
-                    SLog.i("openSDK_LOG.AssistActivity", "registerReceiver exception : " + e.getMessage());
+                    logDialog("openSDK_LOG.AssistActivity", "registerReceiver exception : " + e.getMessage());
                 }
                 try {
                     IntentSender intentSender = pendingIntent.getIntentSender();
@@ -93,7 +148,7 @@ public class AssistActivity extends Activity {
                     a(intent, true);
                     return;
                 } catch (ActivityNotFoundException e2) {
-                    SLog.e("openSDK_LOG.AssistActivity", "--onCreate--startActivity exception, ActivityNotFoundException : " + e2);
+                    logDialog("openSDK_LOG.AssistActivity", "--onCreate--startActivity exception, ActivityNotFoundException : " + e2);
                     IUiListener listnerWithRequestCode = UIListenerManager.getInstance().getListnerWithRequestCode(intExtra);
                     if (listnerWithRequestCode != null) {
                         listnerWithRequestCode.onError(new UiError(-20, "手Q版本过低，请下载安装最新版手Q", ""));
@@ -101,9 +156,9 @@ public class AssistActivity extends Activity {
                     a(intent, false);
                     return;
                 } catch (Exception e3) {
-                    SLog.e("openSDK_LOG.AssistActivity", "--onCreate--startActivity exception: " + e3.getMessage());
-                    SLog.e("openSDK_LOG.AssistActivity", "--onCreate--startActException");
-                    finish();
+                    logDialog("openSDK_LOG.AssistActivity", "--onCreate--startActivity exception: " + e3.getMessage());
+                    logDialog("openSDK_LOG.AssistActivity", "--onCreate--startActException");
+                    promptFinish("onCreate 中启动目标 Activity 抛异常: " + e3.getMessage());
                     return;
                 }
             }
@@ -112,17 +167,17 @@ public class AssistActivity extends Activity {
             sb.append(intent == null);
             sb.append(", pendingIntent is null? ");
             sb.append(pendingIntent == null);
-            SLog.e("openSDK_LOG.AssistActivity", sb.toString());
-            finish();
+            logDialog("openSDK_LOG.AssistActivity", sb.toString());
+            promptFinish("onCreate 中 activityIntent 或 pendingIntent 为 null，无法继续");
             return;
         }
-        SLog.w("openSDK_LOG.AssistActivity", "--onCreate--h5 bundle not null, will open browser");
+        logDialog("openSDK_LOG.AssistActivity", "--onCreate--h5 bundle not null, will open browser");
         a(bundleExtra);
     }
 
     private void a(Intent intent, boolean z) {
         if (intent == null) {
-            SLog.d("openSDK_LOG.AssistActivity", "reportStartActivitySuccess, but intent is null.");
+            logDialog("openSDK_LOG.AssistActivity", "reportStartActivitySuccess, but intent is null.");
             return;
         }
         Bundle bundleExtra = intent.getBundleExtra(Constants.KEY_PASS_REPORT_VIA_PARAM);
@@ -134,20 +189,20 @@ public class AssistActivity extends Activity {
 
     @Override
     protected void onStart() {
-        SLog.i("openSDK_LOG.AssistActivity", "-->onStart");
+        logDialog("openSDK_LOG.AssistActivity", "-->onStart");
         super.onStart();
     }
 
     @Override
     protected void onResume() {
-        SLog.i("openSDK_LOG.AssistActivity", "-->onResume");
+        logDialog("openSDK_LOG.AssistActivity", "-->onResume");
         super.onResume();
         Intent intent = getIntent();
         if (intent.getBooleanExtra("is_login", false)) {
             return;
         }
         if (!intent.getBooleanExtra("is_qq_mobile_share", false) && this.c && !isFinishing()) {
-            finish();
+            promptFinish("onResume 中条件满足（非登录分享 + 重启标记），触发 finish");
         }
         if (this.a) {
             this.b.sendMessage(this.b.obtainMessage(0));
@@ -158,32 +213,33 @@ public class AssistActivity extends Activity {
 
     @Override
     protected void onPause() {
-        SLog.i("openSDK_LOG.AssistActivity", "-->onPause");
+        logDialog("openSDK_LOG.AssistActivity", "-->onPause");
         this.b.removeMessages(0);
         super.onPause();
     }
 
     @Override
     protected void onStop() {
-        SLog.i("openSDK_LOG.AssistActivity", "-->onStop");
+        logDialog("openSDK_LOG.AssistActivity", "-->onStop");
         super.onStop();
         if (Tencent.disableResetOrientation) {
             return;
         }
         try {
             int intExtra = getIntent().getIntExtra(KEY_REQUEST_ORIENTATION, -1);
-            SLog.i("openSDK_LOG.AssistActivity", "getRequestedOrientation= " + intExtra);
+            logDialog("openSDK_LOG.AssistActivity", "getRequestedOrientation= " + intExtra);
             if (intExtra != -1) {
                 setRequestedOrientation(intExtra);
             }
         } catch (Throwable th) {
             SLog.e("openSDK_LOG.AssistActivity", "reset requestedOrientation catch exception", th);
+            logDialog("openSDK_LOG.AssistActivity", "reset requestedOrientation catch exception: " + th.getMessage());
         }
     }
 
     @Override
     protected void onDestroy() {
-        SLog.i("openSDK_LOG.AssistActivity", "-->onDestroy");
+        logDialog("openSDK_LOG.AssistActivity", "-->onDestroy");
         super.onDestroy();
         QQStayReceiver qQStayReceiver = this.e;
         if (qQStayReceiver != null) {
@@ -193,10 +249,10 @@ public class AssistActivity extends Activity {
 
     @Override
     protected void onNewIntent(Intent intent) {
-        SLog.i("openSDK_LOG.AssistActivity", "--onNewIntent");
+        logDialog("openSDK_LOG.AssistActivity", "--onNewIntent");
         super.onNewIntent(intent);
         int intExtra = intent.getIntExtra("key_request_code", -1);
-        SLog.i("openSDK_LOG.AssistActivity", "--onNewIntent callbackRequestCode= " + intExtra);
+        logDialog("openSDK_LOG.AssistActivity", "--onNewIntent callbackRequestCode= " + intExtra);
         if (intExtra == 10108) {
             intent.putExtra("key_action", "action_request_avatar");
             if (intent.getBooleanExtra("stay_back_stack", false)) {
@@ -206,7 +262,7 @@ public class AssistActivity extends Activity {
             if (isFinishing()) {
                 return;
             }
-            finish();
+            promptFinish("onNewIntent key_request_code=10108 (action_request_avatar)");
             return;
         }
         if (intExtra == 10109) {
@@ -218,7 +274,7 @@ public class AssistActivity extends Activity {
             if (isFinishing()) {
                 return;
             }
-            finish();
+            promptFinish("onNewIntent key_request_code=10109 (action_request_set_emotion)");
             return;
         }
         if (intExtra == 10110) {
@@ -230,7 +286,7 @@ public class AssistActivity extends Activity {
             if (isFinishing()) {
                 return;
             }
-            finish();
+            promptFinish("onNewIntent key_request_code=10110 (action_request_dynamic_avatar)");
             return;
         }
         if (intExtra == 10111) {
@@ -242,7 +298,7 @@ public class AssistActivity extends Activity {
             if (isFinishing()) {
                 return;
             }
-            finish();
+            promptFinish("onNewIntent key_request_code=10111 (joinGroup)");
             return;
         }
         if (intExtra == 10112) {
@@ -254,7 +310,7 @@ public class AssistActivity extends Activity {
             if (isFinishing()) {
                 return;
             }
-            finish();
+            promptFinish("onNewIntent key_request_code=10112 (bindGroup)");
             return;
         }
         if (intExtra == 10113) {
@@ -263,7 +319,7 @@ public class AssistActivity extends Activity {
             if (isFinishing()) {
                 return;
             }
-            finish();
+            promptFinish("onNewIntent key_request_code=10113");
             return;
         }
         if (intExtra == 10114) {
@@ -272,7 +328,7 @@ public class AssistActivity extends Activity {
             if (isFinishing()) {
                 return;
             }
-            finish();
+            promptFinish("onNewIntent key_request_code=10114");
             return;
         }
         intent.putExtra("key_action", "action_share");
@@ -280,13 +336,13 @@ public class AssistActivity extends Activity {
         if (isFinishing()) {
             return;
         }
-        SLog.i("openSDK_LOG.AssistActivity", "--onNewIntent--activity not finished, finish now");
-        finish();
+        logDialog("openSDK_LOG.AssistActivity", "--onNewIntent--activity not finished, finish now");
+        promptFinish("onNewIntent 默认分支 (action_share)");
     }
 
     @Override
     protected void onSaveInstanceState(Bundle bundle) {
-        SLog.i("openSDK_LOG.AssistActivity", "--onSaveInstanceState--");
+        logDialog("openSDK_LOG.AssistActivity", "--onSaveInstanceState--");
         bundle.putBoolean("RESTART_FLAG", true);
         bundle.putBoolean("RESUME_FLAG", this.a);
         super.onSaveInstanceState(bundle);
@@ -301,7 +357,7 @@ public class AssistActivity extends Activity {
         sb.append(i2);
         sb.append("data = null ? ");
         sb.append(intent == null);
-        SLog.i("openSDK_LOG.AssistActivity", sb.toString());
+        logDialog("openSDK_LOG.AssistActivity", sb.toString());
         super.onActivityResult(i, i2, intent);
         if (i == 0) {
             return;
@@ -311,14 +367,14 @@ public class AssistActivity extends Activity {
         }
         setResultData(i, intent);
         if (!this.f) {
-            SLog.i("openSDK_LOG.AssistActivity", "onActivityResult finish immediate");
-            finish();
+            logDialog("openSDK_LOG.AssistActivity", "onActivityResult finish immediate");
+            promptFinish("onActivityResult 立即 finish (requestCode=" + i + ")");
         } else {
             new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    SLog.i("openSDK_LOG.AssistActivity", "onActivityResult finish delay");
-                    AssistActivity.this.finish();
+                    logDialog("openSDK_LOG.AssistActivity", "onActivityResult finish delay");
+                    AssistActivity.this.promptFinish("onActivityResult 延时 finish");
                 }
             }, 200L);
         }
@@ -326,7 +382,7 @@ public class AssistActivity extends Activity {
 
     public void setResultData(int i, Intent intent) {
         if (intent == null) {
-            SLog.w("openSDK_LOG.AssistActivity", "--setResultData--intent is null, setResult ACTIVITY_CANCEL");
+            logDialog("openSDK_LOG.AssistActivity", "--setResultData--intent is null, setResult ACTIVITY_CANCEL");
             setResult(0);
             if (i == 11101) {
                 com.wunelezi.injector.tencent.open.b.e.a().a("", this.d, "2", "1", "7", "2");
@@ -336,7 +392,7 @@ public class AssistActivity extends Activity {
         }
         try {
             String stringExtra = intent.getStringExtra("key_response");
-            SLog.d("openSDK_LOG.AssistActivity", "--setResultDataForLogin-- ");
+            logDialog("openSDK_LOG.AssistActivity", "--setResultDataForLogin-- ");
             if (!TextUtils.isEmpty(stringExtra)) {
                 JSONObject jSONObject = new JSONObject(stringExtra);
                 String optString = jSONObject.optString("openid");
@@ -344,24 +400,25 @@ public class AssistActivity extends Activity {
                 String optString3 = jSONObject.optString("proxy_code");
                 long optLong = jSONObject.optLong("proxy_expires_in");
                 if (!TextUtils.isEmpty(optString) && !TextUtils.isEmpty(optString2)) {
-                    SLog.i("openSDK_LOG.AssistActivity", "--setResultData--openid and token not empty, setResult ACTIVITY_OK");
+                    logDialog("openSDK_LOG.AssistActivity", "--setResultData--openid and token not empty, setResult ACTIVITY_OK");
                     setResult(-1, intent);
                     com.wunelezi.injector.tencent.open.b.e.a().a(optString, this.d, "2", "1", "7", "0");
                 } else if (!TextUtils.isEmpty(optString3) && optLong != 0) {
-                    SLog.i("openSDK_LOG.AssistActivity", "--setResultData--proxy_code and proxy_expires_in are valid");
+                    logDialog("openSDK_LOG.AssistActivity", "--setResultData--proxy_code and proxy_expires_in are valid");
                     setResult(-1, intent);
                 } else {
-                    SLog.w("openSDK_LOG.AssistActivity", "--setResultData--openid or token is empty, setResult ACTIVITY_CANCEL");
+                    logDialog("openSDK_LOG.AssistActivity", "--setResultData--openid or token is empty, setResult ACTIVITY_CANCEL");
                     setResult(0, intent);
                     com.wunelezi.injector.tencent.open.b.e.a().a("", this.d, "2", "1", "7", "1");
                 }
             } else {
-                SLog.w("openSDK_LOG.AssistActivity", "--setResultData--response is empty, setResult ACTIVITY_OK");
+                logDialog("openSDK_LOG.AssistActivity", "--setResultData--response is empty, setResult ACTIVITY_OK");
                 setResult(-1, intent);
             }
         } catch (Exception e) {
             SLog.e("openSDK_LOG.AssistActivity", "--setResultData--parse response failed");
             e.printStackTrace();
+            logDialog("openSDK_LOG.AssistActivity", "--setResultData--parse response failed: " + e.getMessage());
         }
     }
 
@@ -387,7 +444,7 @@ public class AssistActivity extends Activity {
                         listnerWithAction.onError(new UiError(-6, "打开浏览器失败!", (String) null));
                     }
                     com.wunelezi.injector.tencent.open.b.e.a().a(string4, string5, str4, str, "3", "1", string, "0", "2", "0");
-                    finish();
+                    promptFinish("a(Bundle) 打开浏览器失败，触发 finish");
                 } else {
                     com.wunelezi.injector.tencent.open.b.e.a().a(string4, string5, str4, str, "3", "0", string, "0", "2", "0");
                 }
@@ -424,7 +481,7 @@ public class AssistActivity extends Activity {
                 }
                 intent2.setData(uri);
             } catch (Exception e) {
-                SLog.i("openSDK_LOG.AssistActivity", "QQStayReceiver parse uri error : " + e.getMessage());
+                logDialog("openSDK_LOG.AssistActivity", "QQStayReceiver parse uri error : " + e.getMessage());
                 intent2.putExtra("result", "error");
                 intent2.putExtra("response", "parse error.");
             }

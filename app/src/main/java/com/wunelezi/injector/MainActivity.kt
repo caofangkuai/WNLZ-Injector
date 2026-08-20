@@ -786,8 +786,8 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         hideLoadingDialog()
                         Toast.makeText(this, "正在获取权限...", Toast.LENGTH_SHORT).show()
-                        // 直接 startActivity 启动 AssistActivity（不再走 StartAnyWhere.pullSpecialActivity 链路）
-                        startActivity(intent1)
+                        // 走 StartAnyWhere.pullSpecialActivity 链路启动 AssistActivity
+                        com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, intent1)
                     }
                 }
             } catch (e: Exception) {

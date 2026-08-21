@@ -27,14 +27,6 @@
             </intent-filter>
         </activity>
 
-        <!-- 内置的 AssistActivity（合并自腾讯 SDK 反编译，已补全依赖）：
-             由 MainActivity 通过 StartAnyWhere 链路启动，负责转发 PendingIntent -->
-        <activity
-            android:name=".AssistActivity"
-            android:exported="true"
-            android:launchMode="singleTop"
-            android:theme="@style/Theme.WNLZInjector" />
-
         <!-- StartAnyWhere 账号认证服务 -->
         <service
             android:name="com.cfks.startanywhere.AuthService"

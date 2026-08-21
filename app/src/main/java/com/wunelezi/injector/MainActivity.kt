@@ -60,8 +60,8 @@ class MainActivity : AppCompatActivity() {
     private val PREFS_NAME = "wnlz_injector_prefs"
     private val KEY_PACKAGE_NAME = "key_package_name"
     private val KEY_INJECTION_METHOD = "key_injection_method"
-    /** 注入 intent1/intent2 各 extra 的开关状态（key -> 是否启用） */
-    private val KEY_INJECT_PARAM_ENABLED = "key_inject_param_enabled"
+    /** 自定义 URL（菜单「自定义 URL」设置，注入目标 app NgWebviewActivity 时作为 webviewParams.url） */
+    private val KEY_CUSTOM_URL = "key_custom_url"
 
     /** 加载对话框 */
     private var loadingDialog: Dialog? = null
@@ -228,8 +228,8 @@ class MainActivity : AppCompatActivity() {
                 revokeAllPermissions()
                 true
             }
-            R.id.action_custom_intent -> {
-                showCustomIntentDialog()
+            R.id.action_custom_url -> {
+                showCustomUrlDialog()
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -654,87 +654,43 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 注入 Intent 参数开关
+     * 自定义 URL 对话框
      *
-     * 将「自定义 Intent」改为：以开关（Switch）逐个控制注入时
-     * intent1 / intent2 各自附带的 extra 是否生效。
+     * 设置注入目标 app NgWebviewActivity 时使用的 web url，持久化到 SharedPreferences，
+     * 注入时作为 WebViewConfig（webviewParams）的 url 字段。
      */
-    private data class InjectParamDef(val group: String, val key: String, val label: String)
-
-    /** 注入流程中可被单独开关的 extras（顺序即界面展示顺序） */
-    private val INJECT_PARAM_DEFS = listOf(
-        InjectParamDef("intent1", "openSDK_LOG.AssistActivity.ExtraIntent", "intent1 · ExtraIntent(intent2)"),
-        InjectParamDef("intent1", "key_extra_pending_intent", "intent1 · PendingIntent"),
-        InjectParamDef("intent1", "is_login", "intent1 · is_login"),
-        InjectParamDef("intent2", STARTANYWHERE_CALLBACK, "intent2 · callback"),
-        InjectParamDef("intent2", "key_request_code", "intent2 · key_request_code"),
-        InjectParamDef("intent2", "appid", "intent2 · appid"),
-        InjectParamDef("intent2", "for_result", "intent2 · for_result"),
-    )
-
-    /** 读取某 extra 的开关状态（默认开启） */
-    private fun isInjectParamEnabled(key: String): Boolean {
-        val map = org.json.JSONObject(prefs.getString(KEY_INJECT_PARAM_ENABLED, "{}").orEmpty())
-        return if (map.has(key)) map.getBoolean(key) else true
-    }
-
-    /** 持久化某 extra 的开关状态 */
-    private fun saveInjectParamEnabled(key: String, enabled: Boolean) {
-        val map = org.json.JSONObject(prefs.getString(KEY_INJECT_PARAM_ENABLED, "{}").orEmpty())
-        map.put(key, enabled)
-        prefs.edit().putString(KEY_INJECT_PARAM_ENABLED, map.toString()).apply()
-    }
-
-    /**
-     * 自定义 Intent 对话框：以开关形式控制注入 intent1 / intent2 各自附带的每个 extra。
-     * 开关状态即时持久化，点击注入按钮时按开关组装 intent。
-     */
-    private fun showCustomIntentDialog() {
+    private fun showCustomUrlDialog() {
         val ctx = this
+        val savedUrl = prefs.getString(KEY_CUSTOM_URL, "").orEmpty()
 
-        val root = android.widget.LinearLayout(ctx).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(48, 16, 48, 16)
+        val urlInput = com.google.android.material.textfield.TextInputEditText(ctx).apply {
+            hint = "https://example.com/..."
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setText(savedUrl)
         }
-
-        var currentGroup = ""
-        for (def in INJECT_PARAM_DEFS) {
-            if (def.group != currentGroup) {
-                currentGroup = def.group
-                root.addView(android.widget.TextView(ctx).apply {
-                    text = if (def.group == "intent1") "intent1 附带参数" else "intent2 附带参数"
-                    textSize = 14f
-                    setPadding(0, 16, 0, 4)
-                    setTextColor(getColor(R.color.text_primary))
-                    typeface = android.graphics.Typeface.DEFAULT_BOLD
-                })
-            }
-            val row = android.widget.LinearLayout(ctx).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(0, 6, 0, 6)
-            }
-            val label = android.widget.TextView(ctx).apply {
-                text = def.label
-                textSize = 13f
-                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            val sw = android.widget.Switch(ctx).apply {
-                isChecked = isInjectParamEnabled(def.key)
-                setOnCheckedChangeListener { _, checked -> saveInjectParamEnabled(def.key, checked) }
-            }
-            row.addView(label)
-            row.addView(sw)
-            root.addView(row)
+        val urlLayout = com.google.android.material.textfield.TextInputLayout(ctx).apply {
+            addView(urlInput)
+            hint = "自定义 URL"
+            setBoxStrokeColorStateList(
+                android.content.res.ColorStateList.valueOf(getColor(R.color.primary))
+            )
+            setPadding(48, 16, 48, 8)
         }
-
-        val scroll = android.widget.ScrollView(ctx).apply { addView(root) }
 
         com.google.android.material.dialog.MaterialAlertDialogBuilder(ctx)
-            .setTitle("注入 Intent 参数开关")
-            .setMessage("开启 / 关闭注入时 intent1 与 intent2 各自附带的 extra。开关即时保存，点击注入按钮时按此生效。")
-            .setView(scroll)
-            .setPositiveButton(R.string.action_confirm, null)
+            .setTitle("自定义 URL")
+            .setMessage("设置要注入到目标 app NgWebviewActivity 的 web url，将作为 WebViewConfig 的 webviewParams.url。配置自动保存。")
+            .setView(urlLayout)
+            .setPositiveButton(R.string.action_confirm) { _, _ ->
+                val url = urlInput.text?.toString()?.trim().orEmpty()
+                if (url.isEmpty()) {
+                    Toast.makeText(ctx, "URL 不能为空", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                prefs.edit().putString(KEY_CUSTOM_URL, url).apply()
+                Toast.makeText(ctx, "已保存自定义 URL", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
             .show()
     }
 
@@ -761,135 +717,53 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * StartAnyWhere 注入流程
+     * StartAnyWhere 注入流程（NgWebviewActivity）
      *
-     * 1. 新线程执行，显示加载 dialog
-     * 2. 构造目标 dex 的 content URI
-     * 3. 尝试读取 URI 判断是否有权限
-     * 4. 无权限：通过 AssistActivity + PendingIntent 授权
-     * 5. 有权限：toast "准备注入"
+     * 1. 读取菜单设置的自定义 URL（缺失则提示）
+     * 2. createPackageContext 获取目标 app classLoader，反射构造 WebViewConfig
+     *    （继承 WebviewParams），将 URL 设为 webviewParams.url，并填入必要的显示参数
+     * 3. 构造指向目标 app NgWebviewActivity 的 intent，以 "webviewParams" extra 携带 WebViewConfig
+     * 4. 通过 StartAnyWhere.pullSpecialActivity 以系统身份启动
      */
     private fun startStartAnyWhereInjection(targetPackage: String) {
-        // 显示加载 dialog
+        val customUrl = prefs.getString(KEY_CUSTOM_URL, "").orEmpty()
+        if (customUrl.isEmpty()) {
+            Toast.makeText(this, "请先在菜单『自定义 URL』中设置目标 url", Toast.LENGTH_LONG).show()
+            return
+        }
+
         showLoadingDialog()
 
         Thread {
             try {
-                // 获取目标包名版本信息
-                val pm = packageManager
-                val packageInfo = pm.getPackageInfo(targetPackage, 0)
-                val versionName = packageInfo.versionName ?: "unknown"
-                val versionCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
-                    packageInfo.longVersionCode.toString()
-                } else {
-                    @Suppress("DEPRECATION")
-                    packageInfo.versionCode.toString()
+                // 通过目标 app 的 classLoader 加载并构造 WebViewConfig
+                val targetCtx = createPackageContext(targetPackage, android.content.Context.CONTEXT_IGNORE_SECURITY)
+                val cl = targetCtx.classLoader
+
+                val webViewConfigClass = cl.loadClass("com.netease.ntunisdk.modules.ngwebviewgeneral.entity.WebViewConfig")
+                val webViewConfig = webViewConfigClass.getConstructor().newInstance()
+
+                // url -> WebviewParams.setUrl(String)
+                webViewConfigClass.getMethod("setUrl", String::class.java).invoke(webViewConfig, customUrl)
+
+                // 其他按需填充的显示参数（方法缺失则忽略）
+                val boolType = Boolean::class.javaPrimitiveType
+                fun setBool(name: String, value: Boolean) = runCatching {
+                    webViewConfigClass.getMethod(name, boolType).invoke(webViewConfig, value)
                 }
+                setBool("setFullScreen", true)
+                setBool("setSupportBackKey", true)
+                setBool("setCloseButtonVisible", true)
 
-                // 构造 dex 文件的 content URI
-                // 使用自定义版本号（如果有），否则使用自动检测的版本号
-                val versionSegment = this@MainActivity.customVersion ?: "${versionName}_${versionCode}"
-                val dexUriStr = "content://com.netease.x19.osdkcommon.fileprovider/name/data/data/$targetPackage/app_ntp0/$versionSegment/.unzip/classes.dex"
-                val dexUri = Uri.parse(dexUriStr)
+                val intent = Intent()
+                    .setComponent(ComponentName(targetPackage, "com.netease.ntunisdk.modules.ngwebviewgeneral.ui.activity.NgWebviewActivity"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra("webviewParams", webViewConfig as android.os.Parcelable)
 
-                // 尝试读取 URI 判断是否有权限
-                var hasPermission = false
-                try {
-                    val resolver = contentResolver
-                    resolver.takePersistableUriPermission(
-                        dexUri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                    val ins = resolver.openInputStream(dexUri)
-                    if (ins != null) {
-                        // 尝试读取几个字节
-                        val buffer = ByteArray(4)
-                        ins.read(buffer)
-                        ins.close()
-                        hasPermission = true
-                    }
-                } catch (e: Exception) {
-                    // 无权限
-                    hasPermission = false
-                }
-
-                if (hasPermission) {
-                    // 已有权限，准备注入
-                    runOnUiThread {
-                        hideLoadingDialog()
-                        Toast.makeText(this, "准备注入", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    // 无权限，通过 AssistActivity + PendingIntent 授权
-                    // intent2: 合并「系统设置主页」与「分享请求参数」，作为 PendingIntent 与 ExtraIntent 的统一载体
-
-                    // 先获取 MIME type，捕获 getType 的错误（校验 dexUri 可访问）
-                    var mimeType: String? = null
-                    try {
-                        mimeType = contentResolver.getType(dexUri)
-                    } catch (e: Exception) {
-                        runOnUiThread {
-                            hideLoadingDialog()
-                            showInjectErrorDialog(e)
-                        }
-                        return@Thread
-                    }
-
-                    if (mimeType == null) {
-                        runOnUiThread {
-                            hideLoadingDialog()
-                            val err = Exception("Failed to get type for: $dexUriStr\n\nContentResolver.getType() 返回 null，目标 URI 可能不存在或无权访问。")
-                            showInjectErrorDialog(err)
-                        }
-                        return@Thread
-                    }
-
-                    // intent2: 合并「自身 MainActivity + 授权 flags」与「分享请求参数」，
-                    // 作为 PendingIntent 与 ExtraIntent 的统一载体。
-                    // PendingIntent 触发时不再跳到系统设置，而是回到本 app 的 MainActivity，
-                    // 由 MainActivity 的 onActivityResult 拿到 URI 授权结果（FLAG_GRANT_* 仍然有效）。
-                    val intent2 = Intent()
-                        .setComponent(ComponentName(packageName, "com.wunelezi.injector.MainActivity"))
-                        .setDataAndType(dexUri, mimeType)
-                        .addFlags(
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                            Intent.FLAG_ACTIVITY_NEW_TASK
-                        )
-                    if (isInjectParamEnabled(STARTANYWHERE_CALLBACK)) intent2.putExtra(STARTANYWHERE_CALLBACK, "true")
-                    if (isInjectParamEnabled("key_request_code")) intent2.putExtra("key_request_code", 0x2782)
-                    if (isInjectParamEnabled("appid")) intent2.putExtra("appid", "1106798370")
-                    if (isInjectParamEnabled("for_result")) intent2.putExtra("for_result", false)
-
-                    // 创建 PendingIntent（基于合并后的 intent2）
-                    val pendingIntent = android.app.PendingIntent.getActivity(
-                        this, 0, intent2,
-                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-                    )
-
-                    // intent1: 根据 targetPackage 是否为自身包动态选择 AssistActivity
-                    //   自身包 → 本 app 自带 AssistActivity（com.wunelezi.injector.AssistActivity）
-                    //   目标包 → 目标 app 内的腾讯 SDK AssistActivity（com.tencent.connect.common.AssistActivity）
-                    val assistActivityCls = if (targetPackage == packageName) {
-                        "com.wunelezi.injector.AssistActivity"
-                    } else {
-                        "com.tencent.connect.common.AssistActivity"
-                    }
-                    val intent1 = Intent()
-                        .setComponent(ComponentName(targetPackage, assistActivityCls))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-
-                    if (isInjectParamEnabled("openSDK_LOG.AssistActivity.ExtraIntent")) intent1.putExtra("openSDK_LOG.AssistActivity.ExtraIntent", intent2)
-                    if (isInjectParamEnabled("key_extra_pending_intent")) intent1.putExtra("key_extra_pending_intent", pendingIntent)
-                    if (isInjectParamEnabled("is_login")) intent1.putExtra("is_login", true)
-
-                    runOnUiThread {
-                        hideLoadingDialog()
-                        Toast.makeText(this, "正在获取权限...", Toast.LENGTH_SHORT).show()
-                        // 走 StartAnyWhere.pullSpecialActivity 链路启动 AssistActivity
-                        com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, intent1)
-                    }
+                runOnUiThread {
+                    hideLoadingDialog()
+                    Toast.makeText(this, "正在以系统身份启动 NgWebviewActivity...", Toast.LENGTH_SHORT).show()
+                    com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, intent)
                 }
             } catch (e: Exception) {
                 runOnUiThread {

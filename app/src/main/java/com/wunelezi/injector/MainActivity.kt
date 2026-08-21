@@ -737,7 +737,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 // 通过目标 app 的 classLoader 加载并构造 WebViewConfig
-                val targetCtx = createPackageContext(targetPackage, android.content.Context.CONTEXT_IGNORE_SECURITY)
+                val targetCtx = createPackageContext(targetPackage, android.content.Context.CONTEXT_IGNORE_SECURITY or android.content.Context.CONTEXT_INCLUDE_CODE)
                 val cl = targetCtx.classLoader
 
                 val webViewConfigClass = cl.loadClass("com.netease.ntunisdk.modules.ngwebviewgeneral.entity.WebViewConfig")

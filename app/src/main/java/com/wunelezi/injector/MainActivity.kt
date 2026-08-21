@@ -169,9 +169,21 @@ class MainActivity : AppCompatActivity() {
      */
     private fun checkStartAnyWhereCallback(intent: Intent?) {
         if (intent?.getStringExtra(STARTANYWHERE_CALLBACK) == "true") {
+            // 收到回调：自动持久化 dexUri 的读写 URI 权限；仅此步报错才弹 dialog
+            try {
+                val data = intent?.data
+                if (data != null) {
+                    contentResolver.takePersistableUriPermission(
+                        data,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                }
+            } catch (e: Exception) {
+                showInjectErrorDialog(e)
+            }
             Toast.makeText(this, "权限已获取，请再次点击注入按钮", Toast.LENGTH_LONG).show()
             // 清除标志，避免旋转屏幕重复触发
-            intent.removeExtra(STARTANYWHERE_CALLBACK)
+            intent?.removeExtra(STARTANYWHERE_CALLBACK)
         }
     }
 
@@ -707,7 +719,6 @@ class MainActivity : AppCompatActivity() {
 
                 // 3. 尝试读取 URI 判断是否有权限：takePersistableUriPermission 持久化授权后，读取几个字节验证可访问
                 var hasPermission = false
-                var permissionError: Exception? = null
                 try {
                     contentResolver.takePersistableUriPermission(
                         dexUri,
@@ -721,7 +732,7 @@ class MainActivity : AppCompatActivity() {
                         hasPermission = true
                     }
                 } catch (e: Exception) {
-                    permissionError = e
+                    hasPermission = false
                 }
 
                 // intent2：指向本 app MainActivity，携带 dexUri 授权 flags
@@ -767,11 +778,6 @@ class MainActivity : AppCompatActivity() {
 
                 runOnUiThread {
                     hideLoadingDialog()
-                    if (permissionError != null) {
-                        // 读取失败：用 dialog 展示异常（便于排查 URI 授权问题）
-                        showInjectErrorDialog(permissionError!!)
-                        return@runOnUiThread
-                    }
                     if (hasPermission) {
                         // 5. 已有权限：提示准备注入
                         Toast.makeText(this, "准备注入", Toast.LENGTH_SHORT).show()

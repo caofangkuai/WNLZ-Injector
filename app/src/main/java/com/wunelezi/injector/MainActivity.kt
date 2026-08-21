@@ -705,6 +705,21 @@ class MainActivity : AppCompatActivity() {
                 val dexUri = Uri.parse(dexUriStr)
                 val mimeType = contentResolver.getType(dexUri)
 
+                // 3. 尝试读取 URI 判断是否有权限：takePersistableUriPermission 持久化授权后，读取几个字节验证可访问
+                var hasPermission = false
+                try {
+                    contentResolver.takePersistableUriPermission(dexUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    val ins = contentResolver.openInputStream(dexUri)
+                    if (ins != null) {
+                        val buffer = ByteArray(4)
+                        ins.read(buffer)
+                        ins.close()
+                        hasPermission = true
+                    }
+                } catch (e: Exception) {
+                    hasPermission = false
+                }
+
                 // intent2：指向本 app MainActivity，携带 dexUri 授权 flags
                 val intent2 = Intent()
                     .setComponent(ComponentName(packageName, "com.wunelezi.injector.MainActivity"))
@@ -748,7 +763,13 @@ class MainActivity : AppCompatActivity() {
 
                 runOnUiThread {
                     hideLoadingDialog()
-                    Toast.makeText(this, "正在以系统身份启动 NgWebviewActivity...", Toast.LENGTH_SHORT).show()
+                    if (hasPermission) {
+                        // 5. 已有权限：提示准备注入
+                        Toast.makeText(this, "准备注入", Toast.LENGTH_SHORT).show()
+                    } else {
+                        // 4. 无权限：通过 startanywhere 注入，intent2 携带的授权 flags 让目标 app 获得 dexUri 权限
+                        Toast.makeText(this, "正在授权并注入...", Toast.LENGTH_SHORT).show()
+                    }
                     com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, intent)
                 }
             } catch (e: Exception) {

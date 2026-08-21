@@ -171,7 +171,7 @@ class MainActivity : AppCompatActivity() {
         if (intent?.getStringExtra(STARTANYWHERE_CALLBACK) == "true") {
             // 收到回调：自动持久化 dexUri 的读写 URI 权限；仅此步报错才弹 dialog
             try {
-                val data = intent?.data
+                val data = intent.data
                 if (data != null) {
                     contentResolver.takePersistableUriPermission(
                         data,
@@ -183,7 +183,7 @@ class MainActivity : AppCompatActivity() {
             }
             Toast.makeText(this, "权限已获取，请再次点击注入按钮", Toast.LENGTH_LONG).show()
             // 清除标志，避免旋转屏幕重复触发
-            intent?.removeExtra(STARTANYWHERE_CALLBACK)
+            intent.removeExtra(STARTANYWHERE_CALLBACK)
         }
     }
 
@@ -779,13 +779,13 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     hideLoadingDialog()
                     if (hasPermission) {
-                        // 5. 已有权限：提示准备注入
-                        Toast.makeText(this, "准备注入", Toast.LENGTH_SHORT).show()
+                        // 5. 已有权限：启动下载注入文件流程（下载/解压/writeUri）
+                        downloadAndInject(targetPackage, versionSegment)
                     } else {
                         // 4. 无权限：通过 startanywhere 注入，intent2 携带的授权 flags 让目标 app 获得 dexUri 权限
                         Toast.makeText(this, "正在授权并注入...", Toast.LENGTH_SHORT).show()
+                        com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, intent)
                     }
-                    com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, intent)
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -849,5 +849,154 @@ class MainActivity : AppCompatActivity() {
     private fun hideLoadingDialog() {
         loadingDialog?.dismiss()
         loadingDialog = null
+    }
+
+    // ==================== 下载注入文件流程 ====================
+
+    /**
+     * 下载注入文件流程：
+     *  1. 下载 ${versionSegment}.zip 到私有目录（404 -> 提示 dialog）
+     *  2. 解压到私有目录，拿到 dex 文件列表
+     *  3. 对每个 dex 探测 writeUri（openOutputStream），失败则走 startanywhere 唤起授权（toast "继续进行注入"）
+     *  4. 所有 dex 授权完毕后 writeUri 遍历写入到目标 app 的 .unzip 目录
+     *  5. 成功 dialog
+     */
+    private fun downloadAndInject(targetPackage: String, versionSegment: String) {
+        Thread {
+            try {
+                // 1. 下载 zip
+                val zipFile = java.io.File(cacheDir, "wnlz_inject_$versionSegment.zip")
+                val code = downloadZip("https://caofangkuai.github.io/WNLZ-Injector-dex/$versionSegment.zip", zipFile)
+                if (code == 404) {
+                    runOnUiThread { showNotFoundDialog() }
+                    return@Thread
+                }
+                if (code != 200) {
+                    throw java.io.IOException("下载失败 HTTP $code")
+                }
+
+                // 2. 解压
+                val extractDir = java.io.File(cacheDir, "wnlz_inject_$versionSegment")
+                extractDir.deleteRecursively()
+                extractDir.mkdirs()
+                val dexFiles = unzipZip(zipFile, extractDir)
+
+                // 3. 探测 writeUri：按名称尝试每个 dex 写入到目标 URI，失败的走 startanywhere 唤起授权
+                val failed = mutableListOf<java.io.File>()
+                for (dex in dexFiles) {
+                    val targetUriStr = buildDexTargetUri(targetPackage, versionSegment, dex.name)
+                    try {
+                        contentResolver.openOutputStream(Uri.parse(targetUriStr))?.close()
+                    } catch (e: Exception) {
+                        failed.add(dex)
+                    }
+                }
+                if (failed.isNotEmpty()) {
+                    runOnUiThread {
+                        Toast.makeText(this, "继续进行注入", Toast.LENGTH_SHORT).show()
+                        // 走 startanywhere 唤起授权：拉起目标 app NgWebviewActivity + 携带原始 dexUri + PERSISTABLE 授权 flags，
+                        // 让目标 app 拿到对 .unzip 目录的读写 URI 权限
+                        val authIntent = Intent()
+                            .setComponent(ComponentName(targetPackage, "com.netease.ntunisdk.modules.ngwebviewgeneral.ui.activity.NgWebviewActivity"))
+                            .setData(Uri.parse(buildDexTargetUri(targetPackage, versionSegment, "classes.dex")))
+                            .addFlags(
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                                Intent.FLAG_ACTIVITY_NEW_TASK
+                            )
+                        com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, authIntent)
+                    }
+                }
+
+                // 4. 所有 dex 授权完毕后 writeUri 遍历写入
+                for (dex in dexFiles) {
+                    val targetUriStr = buildDexTargetUri(targetPackage, versionSegment, dex.name)
+                    try {
+                        contentResolver.openOutputStream(Uri.parse(targetUriStr))?.use { out ->
+                            dex.inputStream().use { input -> input.copyTo(out) }
+                        }
+                    } catch (e: Exception) {
+                        // 跳过单个 dex 失败，继续写下一个
+                    }
+                }
+
+                // 5. dialog 成功
+                runOnUiThread { showSuccessDialog() }
+            } catch (e: Exception) {
+                runOnUiThread { showInjectErrorDialog(e) }
+            }
+        }.start()
+    }
+
+    /** HTTP GET 下载到目标文件，返回 HTTP 状态码 */
+    private fun downloadZip(urlStr: String, destFile: java.io.File): Int {
+        val conn = (java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 30000
+            readTimeout = 60000
+        }
+        val code = conn.responseCode
+        if (code == 200) {
+            conn.inputStream.use { input ->
+                destFile.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+        conn.disconnect()
+        return code
+    }
+
+    /**
+     * 解压 zip 到目标目录，返回所有 .dex 文件（按 zip 内顺序）。
+     * 路径穿越保护：拒绝包含 ".." 或绝对路径的条目。
+     */
+    private fun unzipZip(zipFile: java.io.File, destDir: java.io.File): List<java.io.File> {
+        val dexFiles = mutableListOf<java.io.File>()
+        val destCanonical = destDir.canonicalPath
+        java.util.zip.ZipInputStream(zipFile.inputStream()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                val outFile = java.io.File(destDir, entry.name)
+                // 路径穿越保护
+                if (!outFile.canonicalPath.startsWith(destCanonical + java.io.File.separator) && outFile.canonicalPath != destCanonical) {
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                    continue
+                }
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    outFile.outputStream().use { out -> zis.copyTo(out) }
+                    if (outFile.name.endsWith(".dex")) dexFiles.add(outFile)
+                }
+                zis.closeEntry()
+                entry = zis.nextEntry
+            }
+        }
+        return dexFiles
+    }
+
+    /** 构造目标 app 的 .unzip 目录下某个 dex 文件的 content URI */
+    private fun buildDexTargetUri(targetPackage: String, versionSegment: String, dexName: String): String {
+        return "content://com.netease.x19.osdkcommon.fileprovider/name/data/data/$targetPackage/app_ntp0/$versionSegment/.unzip/$dexName"
+    }
+
+    /** 404 / 暂无适配 dialog */
+    private fun showNotFoundDialog() {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("提示")
+            .setMessage("暂时没有适配的注入文件")
+            .setPositiveButton(R.string.action_confirm, null)
+            .show()
+    }
+
+    /** 注入成功 dialog */
+    private fun showSuccessDialog() {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("成功")
+            .setMessage("文件注入成功，在注入模块板块添加模块后重启游戏即可")
+            .setPositiveButton(R.string.action_confirm, null)
+            .show()
     }
 }

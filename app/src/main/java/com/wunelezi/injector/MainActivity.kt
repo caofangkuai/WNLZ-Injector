@@ -715,6 +715,7 @@ class MainActivity : AppCompatActivity() {
                         Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
                         Intent.FLAG_ACTIVITY_NEW_TASK
                     )
+                    .putExtra(STARTANYWHERE_CALLBACK, "true")
 
                 // intent2 -> intent scheme URI -> url 编码 -> 拼接到基础 URL 的 ?intent= 参数
                 val intentUri = intent2.toUri(Intent.URI_INTENT_SCHEME)

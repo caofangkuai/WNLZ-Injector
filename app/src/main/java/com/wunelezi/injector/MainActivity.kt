@@ -707,8 +707,12 @@ class MainActivity : AppCompatActivity() {
 
                 // 3. 尝试读取 URI 判断是否有权限：takePersistableUriPermission 持久化授权后，读取几个字节验证可访问
                 var hasPermission = false
+                var permissionError: Exception? = null
                 try {
-                    contentResolver.takePersistableUriPermission(dexUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    contentResolver.takePersistableUriPermission(
+                        dexUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
                     val ins = contentResolver.openInputStream(dexUri)
                     if (ins != null) {
                         val buffer = ByteArray(4)
@@ -717,7 +721,7 @@ class MainActivity : AppCompatActivity() {
                         hasPermission = true
                     }
                 } catch (e: Exception) {
-                    hasPermission = false
+                    permissionError = e
                 }
 
                 // intent2：指向本 app MainActivity，携带 dexUri 授权 flags
@@ -763,6 +767,11 @@ class MainActivity : AppCompatActivity() {
 
                 runOnUiThread {
                     hideLoadingDialog()
+                    if (permissionError != null) {
+                        // 读取失败：用 dialog 展示异常（便于排查 URI 授权问题）
+                        showInjectErrorDialog(permissionError!!)
+                        return@runOnUiThread
+                    }
                     if (hasPermission) {
                         // 5. 已有权限：提示准备注入
                         Toast.makeText(this, "准备注入", Toast.LENGTH_SHORT).show()

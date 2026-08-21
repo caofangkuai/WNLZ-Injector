@@ -60,8 +60,8 @@ class MainActivity : AppCompatActivity() {
     private val PREFS_NAME = "wnlz_injector_prefs"
     private val KEY_PACKAGE_NAME = "key_package_name"
     private val KEY_INJECTION_METHOD = "key_injection_method"
-    /** 自定义 URL（菜单「自定义 URL」设置，注入目标 app NgWebviewActivity 时作为 webviewParams.url） */
-    private val KEY_CUSTOM_URL = "key_custom_url"
+    /** 注入用基础 URL：intent2 序列化后的 intent scheme URI（url 编码）作为 ?intent= 参数拼接到此后 */
+    private val INJECT_BASE_URL = "https://caofangkuai.github.io/WNLZ-Injector-dex/inject.html?intent="
 
     /** 加载对话框 */
     private var loadingDialog: Dialog? = null
@@ -226,10 +226,6 @@ class MainActivity : AppCompatActivity() {
             }
             R.id.action_revoke_permissions -> {
                 revokeAllPermissions()
-                true
-            }
-            R.id.action_custom_url -> {
-                showCustomUrlDialog()
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -653,47 +649,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /**
-     * 自定义 URL 对话框
-     *
-     * 设置注入目标 app NgWebviewActivity 时使用的 web url，持久化到 SharedPreferences，
-     * 注入时作为 WebViewConfig（webviewParams）的 url 字段。
-     */
-    private fun showCustomUrlDialog() {
-        val ctx = this
-        val savedUrl = prefs.getString(KEY_CUSTOM_URL, "").orEmpty()
-
-        val urlInput = com.google.android.material.textfield.TextInputEditText(ctx).apply {
-            hint = "https://example.com/..."
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
-            setText(savedUrl)
-        }
-        val urlLayout = com.google.android.material.textfield.TextInputLayout(ctx).apply {
-            addView(urlInput)
-            hint = "自定义 URL"
-            setBoxStrokeColorStateList(
-                android.content.res.ColorStateList.valueOf(getColor(R.color.primary))
-            )
-            setPadding(48, 16, 48, 8)
-        }
-
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(ctx)
-            .setTitle("自定义 URL")
-            .setMessage("设置要注入到目标 app NgWebviewActivity 的 web url，将作为 WebViewConfig 的 webviewParams.url。配置自动保存。")
-            .setView(urlLayout)
-            .setPositiveButton(R.string.action_confirm) { _, _ ->
-                val url = urlInput.text?.toString()?.trim().orEmpty()
-                if (url.isEmpty()) {
-                    Toast.makeText(ctx, "URL 不能为空", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                prefs.edit().putString(KEY_CUSTOM_URL, url).apply()
-                Toast.makeText(ctx, "已保存自定义 URL", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
-    }
-
     // ==================== 注入按钮逻辑 ====================
 
     private fun onInjectClicked() {
@@ -719,23 +674,53 @@ class MainActivity : AppCompatActivity() {
     /**
      * StartAnyWhere 注入流程（NgWebviewActivity）
      *
-     * 1. 读取菜单设置的自定义 URL（缺失则提示）
-     * 2. createPackageContext 获取目标 app classLoader，反射构造 WebViewConfig
-     *    （继承 WebviewParams），将 URL 设为 webviewParams.url，并填入必要的显示参数
-     * 3. 构造指向目标 app NgWebviewActivity 的 intent，以 "webviewParams" extra 携带 WebViewConfig
-     * 4. 通过 StartAnyWhere.pullSpecialActivity 以系统身份启动
+     * 1. 构造目标 app 的 dex content URI（版本段优先用自定义版本 customVersion，否则自动检测）
+     * 2. 以该 dexUri 构造 intent2（指向本 app MainActivity，携带 read/write/persist 授权 + NEW_TASK）
+     * 3. intent2.toUri(URI_INTENT_SCHEME) 后 url 编码，拼接进基础 URL 的 ?intent= 参数，得到最终 web url
+     * 4. createPackageContext 获取目标 app classLoader，反射构造 WebViewConfig（继承 WebviewParams）
+     *    将最终 url 设为 webviewParams.url，并填入必要的显示参数
+     * 5. 构造指向目标 app NgWebviewActivity 的 intent，以 "webviewParams" extra 携带 WebViewConfig
+     * 6. 通过 StartAnyWhere.pullSpecialActivity 以系统身份启动
      */
     private fun startStartAnyWhereInjection(targetPackage: String) {
-        val customUrl = prefs.getString(KEY_CUSTOM_URL, "").orEmpty()
-        if (customUrl.isEmpty()) {
-            Toast.makeText(this, "请先在菜单『自定义 URL』中设置目标 url", Toast.LENGTH_LONG).show()
-            return
-        }
-
         showLoadingDialog()
 
         Thread {
             try {
+                // 版本段：优先自定义版本，否则实时检测目标包的 versionName_versionCode
+                val versionSegment = customVersion ?: run {
+                    val pi = packageManager.getPackageInfo(targetPackage, 0)
+                    val vName = pi.versionName ?: "unknown"
+                    val vCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                        pi.longVersionCode.toString()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        pi.versionCode.toString()
+                    }
+                    "${vName}_$vCode"
+                }
+
+                // 目标 dex 的 content URI
+                val dexUriStr = "content://com.netease.x19.osdkcommon.fileprovider/name/data/data/$targetPackage/app_ntp0/$versionSegment/.unzip/classes.dex"
+                val dexUri = Uri.parse(dexUriStr)
+                val mimeType = contentResolver.getType(dexUri)
+
+                // intent2：指向本 app MainActivity，携带 dexUri 授权 flags
+                val intent2 = Intent()
+                    .setComponent(ComponentName(packageName, "com.wunelezi.injector.MainActivity"))
+                    .setDataAndType(dexUri, mimeType)
+                    .addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK
+                    )
+
+                // intent2 -> intent scheme URI -> url 编码 -> 拼接到基础 URL 的 ?intent= 参数
+                val intentUri = intent2.toUri(Intent.URI_INTENT_SCHEME)
+                val encodedIntent = java.net.URLEncoder.encode(intentUri, "UTF-8")
+                val finalUrl = INJECT_BASE_URL + encodedIntent
+
                 // 通过目标 app 的 classLoader 加载并构造 WebViewConfig
                 val targetCtx = createPackageContext(targetPackage, android.content.Context.CONTEXT_IGNORE_SECURITY or android.content.Context.CONTEXT_INCLUDE_CODE)
                 val cl = targetCtx.classLoader
@@ -744,7 +729,7 @@ class MainActivity : AppCompatActivity() {
                 val webViewConfig = webViewConfigClass.getConstructor().newInstance()
 
                 // url -> WebviewParams.setUrl(String)
-                webViewConfigClass.getMethod("setUrl", String::class.java).invoke(webViewConfig, customUrl)
+                webViewConfigClass.getMethod("setUrl", String::class.java).invoke(webViewConfig, finalUrl)
 
                 // 其他按需填充的显示参数（方法缺失则忽略）
                 val boolType = Boolean::class.javaPrimitiveType

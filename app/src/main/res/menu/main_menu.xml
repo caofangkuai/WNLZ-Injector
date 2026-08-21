@@ -9,8 +9,4 @@
         android:id="@+id/action_revoke_permissions"
         android:title="@string/action_revoke_permissions"
         app:showAsAction="never" />
-    <item
-        android:id="@+id/action_custom_url"
-        android:title="自定义 URL"
-        app:showAsAction="never" />
 </menu>

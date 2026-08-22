@@ -14,8 +14,8 @@
     <string name="toast_no_package">请先输入包名</string>
     <string name="toast_no_method">请先选择注入方式</string>
     <string name="toast_injecting">正在注入…（占位逻辑）</string>
-    <string name="method_start_anywhere">StartAnyWhere</string>
-    <string name="method_start_anywhere_desc">利用 Intent 重定向实现任意起点启动</string>
+    <string name="method_start_anywhere">StartAnyWhere(NgWebviewActivity)</string>
+    <string name="method_start_anywhere_desc">利用 Intent 重定向实现任意Activity启动</string>
     <string name="supported">已支持</string>
     <string name="not_supported">不支持</string>
     <string name="btn_select_modules">选择注入模块</string>

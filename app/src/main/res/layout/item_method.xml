@@ -35,7 +35,7 @@
             android:textSize="13sp"
             android:textColor="@color/text_hint"
             tools:ignore="HardcodedText"
-            android:text="利用 PendingIntent 重定向实现任意起点启动" />
+            android:text="利用 Intent 重定向实现任意Activity启动" />
 
     </LinearLayout>
 

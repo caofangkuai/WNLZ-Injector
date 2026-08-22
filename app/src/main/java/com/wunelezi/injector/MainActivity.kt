@@ -676,10 +676,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (method == InjectionMethod.START_ANYWHERE) {
-            startStartAnyWhereInjection(packageName)
-        } else {
-            Toast.makeText(this, R.string.toast_injecting, Toast.LENGTH_SHORT).show()
+        when (method) {
+            InjectionMethod.START_ANYWHERE_NGWEBVIEW -> startStartAnyWhereInjection(packageName)
+            InjectionMethod.START_ANYWHERE_ASSIST -> startStartAnyWhereAssistInjection(packageName)
+            else -> Toast.makeText(this, R.string.toast_injecting, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -783,6 +783,109 @@ class MainActivity : AppCompatActivity() {
                         downloadAndInject(targetPackage, versionSegment)
                     } else {
                         // 4. 无权限：通过 startanywhere 注入，intent2 携带的授权 flags 让目标 app 获得 dexUri 权限
+                        Toast.makeText(this, "正在授权并注入...", Toast.LENGTH_SHORT).show()
+                        com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, intent)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    hideLoadingDialog()
+                    showInjectErrorDialog(e)
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * StartAnyWhere(AssistActivity) 注入流程
+     *
+     * 1. 构造目标 app 的 dex content URI（版本段优先用自定义版本 customVersion，否则自动检测）
+     * 2. 以该 dexUri 构造 intent2（指向本 app MainActivity，携带 read/write/persist 授权 + NEW_TASK + callback）
+     * 3. 以 intent2 构造 pendingIntent
+     * 4. 构造指向目标 app 自带 com.tencent.connect.common.AssistActivity 的 intent1，
+     *    将「原来的参数」(ExtraIntent(intent2) / key_extra_pending_intent(pendingIntent) / is_login)
+     *    转成 Bundle 后用 putExtras 传递（不再逐个 putExtra）
+     * 5. 通过 StartAnyWhere.pullSpecialActivity 以系统身份启动
+     * 其余授权 / 注入 / 下载 dex 逻辑与 StartAnyWhere(NgWebviewActivity) 一致。
+     */
+    private fun startStartAnyWhereAssistInjection(targetPackage: String) {
+        showLoadingDialog()
+
+        Thread {
+            try {
+                // 版本段：优先自定义版本，否则实时检测目标包的 versionName_versionCode
+                val versionSegment = customVersion ?: run {
+                    val pi = packageManager.getPackageInfo(targetPackage, 0)
+                    val vName = pi.versionName ?: "unknown"
+                    val vCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                        pi.longVersionCode.toString()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        pi.versionCode.toString()
+                    }
+                    "${vName}_$vCode"
+                }
+
+                // 目标 dex 的 content URI
+                val dexUriStr = "content://com.netease.x19.osdkcommon.fileprovider/name/data/data/$targetPackage/app_ntp0/$versionSegment/.unzip/classes.dex"
+                val dexUri = Uri.parse(dexUriStr)
+                val mimeType = contentResolver.getType(dexUri)
+
+                // 尝试读取 URI 判断是否有权限：takePersistableUriPermission 持久化授权后，读取几个字节验证可访问
+                var hasPermission = false
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        dexUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                    val ins = contentResolver.openInputStream(dexUri)
+                    if (ins != null) {
+                        val buffer = ByteArray(4)
+                        ins.read(buffer)
+                        ins.close()
+                        hasPermission = true
+                    }
+                } catch (e: Exception) {
+                    hasPermission = false
+                }
+
+                // intent2：指向本 app MainActivity，携带 dexUri 授权 flags + callback
+                val intent2 = Intent()
+                    .setComponent(ComponentName(packageName, "com.wunelezi.injector.MainActivity"))
+                    .setDataAndType(dexUri, mimeType)
+                    .addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK
+                    )
+                    .putExtra(STARTANYWHERE_CALLBACK, "true")
+
+                // pendingIntent：基于 intent2
+                val pendingIntent = android.app.PendingIntent.getActivity(
+                    this, 0, intent2,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+
+                // intent1（授权）：指向目标 app 自带的 com.tencent.connect.common.AssistActivity，
+                // 将原来的参数转成 Bundle 后用 putExtras 传递
+                val assistParams = android.os.Bundle()
+                assistParams.putParcelable("openSDK_LOG.AssistActivity.ExtraIntent", intent2)
+                assistParams.putParcelable("key_extra_pending_intent", pendingIntent)
+                assistParams.putBoolean("is_login", true)
+
+                val intent = Intent()
+                    .setComponent(ComponentName(targetPackage, "com.tencent.connect.common.AssistActivity"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtras(assistParams)
+
+                runOnUiThread {
+                    hideLoadingDialog()
+                    if (hasPermission) {
+                        // 已有权限：启动下载注入文件流程（下载/解压/writeUri）
+                        downloadAndInject(targetPackage, versionSegment)
+                    } else {
+                        // 无权限：通过 startanywhere 注入，授予目标 app dexUri 权限
                         Toast.makeText(this, "正在授权并注入...", Toast.LENGTH_SHORT).show()
                         com.cfks.startanywhere.StartAnyWhere.pullSpecialActivity(this, intent)
                     }

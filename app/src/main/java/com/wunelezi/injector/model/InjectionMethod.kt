@@ -12,9 +12,13 @@ enum class InjectionMethod(
     val displayName: String,
     val description: String
 ) {
-    START_ANYWHERE(
-        displayName = "StartAnyWhere",
-        description = "利用 Intent 重定向实现任意起点启动"
+    START_ANYWHERE_NGWEBVIEW(
+        displayName = "StartAnyWhere(NgWebviewActivity)",
+        description = "利用 Intent 重定向实现任意Activity启动"
+    ),
+    START_ANYWHERE_ASSIST(
+        displayName = "StartAnyWhere(AssistActivity)",
+        description = "利用 Intent 重定向实现任意Activity启动"
     );
 
     /**
@@ -28,7 +32,7 @@ enum class InjectionMethod(
      */
     fun isSupported(): Boolean {
         return when (this) {
-            START_ANYWHERE -> {
+            START_ANYWHERE_NGWEBVIEW, START_ANYWHERE_ASSIST -> {
                 Build.VERSION.SDK_INT >= 30 &&
                     Build.VERSION.SDK_INT <= 33 &&
                     Build.VERSION.SECURITY_PATCH != null &&

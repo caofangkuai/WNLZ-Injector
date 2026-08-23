@@ -82,9 +82,14 @@ class MainActivity : AppCompatActivity() {
 
     /** Shizuku 用户服务参数：指向本应用内、由 Shizuku 以 root/shell 身份拉起的 ShizukuShellService */
     private val shizukuUserServiceArgs by lazy {
+        // 官方要求：UserServiceArgs.forAdd() 强制校验 processNameSuffix 非空，
+        // 必须显式设置（官方 demo 使用 ":shizuku"）；version 用于服务端校验，建议带上。
         Shizuku.UserServiceArgs(
             ComponentName(BuildConfig.APPLICATION_ID, ShizukuShellService::class.java.name)
-        ).daemon(false).tag("wnlz-cve")
+        ).daemon(false).debuggable(BuildConfig.DEBUG)
+            .processNameSuffix(":shizuku")
+            .version(BuildConfig.VERSION_CODE)
+            .tag("wnlz-cve")
     }
 
     /** Shizuku 用户服务连接，异步获取 IShizukuShell binder */

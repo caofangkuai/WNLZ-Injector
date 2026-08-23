@@ -24,11 +24,10 @@
 }
 
 # Shizuku：保留 rikka.shizuku 全部成员。
-# 本应用通过官方 UserService（bindUserService / IShizukuShell AIDL）调用 Shizuku，
-# 不再依赖私有 newProcess 反射；保留该包以防 R8 误删 UserService 相关符号。
+# 本应用通过反射调用 Shizuku.newProcess（Rikka 13.x 中为 private），
+# R8 必须保留该方法及所在类，否则运行时找不到 newProcess。
 -keep class rikka.shizuku.** { *; }
 -keep class moe.shizuku.server.** { *; }
 
-# 保留本应用的 ShizukuShellService 及其构造器（@Keep 已标注，此处双保险）：
-# Shizuku 服务端通过 createPackageContextAsUser + 反射构造该类，R8 不得裁剪。
--keep class com.wunelezi.injector.ShizukuShellService { *; }
+# 保留 ShizukuProvider（provider 依赖自动注册），防止被 R8/资源处理误删
+-keep class rikka.shizuku.ShizukuProvider { *; }

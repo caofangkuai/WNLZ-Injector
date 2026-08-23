@@ -3,7 +3,6 @@ package com.wunelezi.injector
 import android.app.Dialog
 import android.content.ComponentName
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -12,10 +11,6 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.RemoteException
 import com.wunelezi.injector.BuildConfig
-import com.wunelezi.injector.IShizukuShell
-import com.wunelezi.injector.ShizukuShellService
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
@@ -80,40 +75,26 @@ class MainActivity : AppCompatActivity() {
     /** 待处理的 Shizuku 权限授予回调 */
     private var shizukuPermissionCallback: ((Boolean) -> Unit)? = null
 
-    /** Shizuku 用户服务参数：指向本应用内、由 Shizuku 以 root/shell 身份拉起的 ShizukuShellService */
-    private val shizukuUserServiceArgs by lazy {
-        // 官方要求：UserServiceArgs.forAdd() 强制校验 processNameSuffix 非空，
-        // 必须显式设置（官方 demo 使用 ":shizuku"）；version 用于服务端校验，建议带上。
-        Shizuku.UserServiceArgs(
-            ComponentName(BuildConfig.APPLICATION_ID, ShizukuShellService::class.java.name)
-        ).daemon(false).debuggable(BuildConfig.DEBUG)
-            .processNameSuffix(":shizuku")
-            .version(BuildConfig.VERSION_CODE)
-            .tag("wnlz-cve")
+    /**
+     * Shizuku.newProcess 方法引用缓存。
+     *
+     * 说明：Rikka 官方 13.x 将 newProcess 标记为 private 并推荐使用 UserService，但本设备运行的
+     * 是 Shizuku 的 Stellar 分支（roro.stellar），该分支**重新启用并支持 newProcess**（其兼容层
+     * 明确支持 newProcess）。而 UserService 方式在 Stellar 的 UserServiceStarter 中存在
+     * LoadedApk.makeApplication 的 NPE 崩溃（直接创建新的 Android 进程去加载本应用 APK 时触发），
+     * 换客户端 API 也绕不过（都走同一个服务端 UserServiceStarter）。
+     *
+     * newProcess 直接在 Shizuku/Stellar 服务端进程内 exec，不会创建新的 Android 进程，因此能稳定工作。
+     * 由于 Rikka 客户端 jar 中该方法为 private，此处通过反射获取（proguard 已 keep rikka.shizuku.**）。
+     */
+    private val shizukuNewProcessMethod by lazy {
+        Shizuku::class.java.getDeclaredMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java
+        ).apply { isAccessible = true }
     }
-
-    /** Shizuku 用户服务连接，异步获取 IShizukuShell binder */
-    private val shizukuServiceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            shizukuShellBinder = IShizukuShell.Stub.asInterface(binder)
-            shizukuBindLatch.countDown()
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            shizukuShellBinder = null
-        }
-    }
-
-    /** 当前已绑定的 Shizuku 用户服务 binder（null 表示尚未绑定） */
-    @Volatile
-    private var shizukuShellBinder: IShizukuShell? = null
-
-    /** 绑定等待闩，每次重新绑定前重置 */
-    private var shizukuBindLatch = CountDownLatch(1)
-
-    /** 绑定阶段捕获的异常（若有） */
-    @Volatile
-    private var shizukuBindError: Throwable? = null
 
     /** Shizuku binder 已连接监听（官方生命周期：binder 存活时才能调用 Shizuku API） */
     private val shizukuBinderReceivedListener = Shizuku.OnBinderReceivedListener {
@@ -122,7 +103,6 @@ class MainActivity : AppCompatActivity() {
 
     /** Shizuku binder 断开监听（官方生命周期） */
     private val shizukuBinderDeadListener = Shizuku.OnBinderDeadListener {
-        shizukuShellBinder = null
         Log.d("WNLZ", "Shizuku binder dead")
     }
 
@@ -240,11 +220,6 @@ class MainActivity : AppCompatActivity() {
         Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
         Shizuku.removeBinderReceivedListener(shizukuBinderReceivedListener)
         Shizuku.removeBinderDeadListener(shizukuBinderDeadListener)
-        // 退出前解绑用户服务，避免残留 user_service 进程
-        if (shizukuShellBinder != null) {
-            runCatching { Shizuku.unbindUserService(shizukuUserServiceArgs, shizukuServiceConnection, true) }
-            shizukuShellBinder = null
-        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -955,11 +930,11 @@ class MainActivity : AppCompatActivity() {
     private data class ShellResult(val exitCode: Int, val output: String)
 
     /**
-     * 通过 Shizuku 用户服务（官方 UserService，替代已废弃的 newProcess）以系统/root 身份执行 shell 命令。
+     * 通过 Shizuku/Stellar 以系统/root 身份执行 shell 命令。
      *
-     * 流程：首次调用时 bindUserService 拉起本应用的 ShizukuShellService（运行在具有 root/shell
-     * 身份的 user_service 进程中），经 AIDL 调用 exec 执行命令并返回退出码与输出；binder 在
-     * runCveFlow 结束时统一解绑。
+     * 采用 newProcess：直接在 Shizuku/Stellar 服务端进程内 exec，不创建新的 Android 进程，
+     * 因此不会出现 UserService 方式在部分设备（Stellar UserServiceStarter）上的
+     * LoadedApk.makeApplication NPE 崩溃。newProcess 在 Rikka 13.x 为 private，故反射调用。
      *
      * @param command 要执行的命令（经 sh -c 执行）
      * @param env     环境变量数组（形如 "KEY=VALUE"，可用于携带含换行的 PAYLOAD）
@@ -969,32 +944,16 @@ class MainActivity : AppCompatActivity() {
         if (!Shizuku.pingBinder()) {
             throw IllegalStateException("Shizuku 未连接")
         }
-        if (shizukuShellBinder == null) {
-            // bindUserService 内部依赖 Looper，必须在有 Looper 的线程（主线程）发起；
-            // 当前后台线程仅负责 await 绑定结果。
-            shizukuBindLatch = CountDownLatch(1)
-            val latch = shizukuBindLatch
-            shizukuBindError = null
-            runOnUiThread {
-                try {
-                    Shizuku.bindUserService(shizukuUserServiceArgs, shizukuServiceConnection)
-                } catch (e: Throwable) {
-                    shizukuBindError = e
-                    latch.countDown()
-                }
-            }
-            if (!latch.await(15, TimeUnit.SECONDS)) {
-                throw RuntimeException("绑定 Shizuku 用户服务超时")
-            }
-            shizukuBindError?.let { throw it }
-        }
-        val binder = shizukuShellBinder ?: throw IllegalStateException("Shizuku 用户服务未就绪")
-        return try {
-            val bundle = binder.exec(command, env)
-            ShellResult(bundle.getInt("exit", -1), bundle.getString("out") ?: "")
-        } catch (e: RemoteException) {
-            throw RuntimeException("Shizuku 用户服务调用失败: ${e.message}", e)
-        }
+        val process = shizukuNewProcessMethod.invoke(
+            null,
+            arrayOf("sh", "-c", command),
+            env,
+            null
+        ) as Process
+        val out = process.inputStream.bufferedReader().use { it.readText() }
+        val err = process.errorStream.bufferedReader().use { it.readText() }
+        val exitCode = process.waitFor()
+        return ShellResult(exitCode, out + err)
     }
 
     /**
@@ -1147,12 +1106,6 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     hideLoadingDialog()
                     showInjectErrorDialog(e)
-                }
-            } finally {
-                // 解绑 Shizuku 用户服务，释放 user_service 进程
-                if (shizukuShellBinder != null) {
-                    runCatching { Shizuku.unbindUserService(shizukuUserServiceArgs, shizukuServiceConnection, true) }
-                    shizukuShellBinder = null
                 }
             }
         }.start()

@@ -23,6 +23,10 @@ enum class InjectionMethod(
     CVE_2024_0044(
         displayName = "CVE-2024-0044",
         description = "利用 Shizuku + mcinject 实现任意Activity启动"
+    ),
+    ROOT(
+        displayName = "Root注入",
+        description = "以 Root 身份直接替换 app_ntp0/.unzip 下的 dex，并还原原文件的权限/所有者/用户组/修改时间"
     );
 
     /**
@@ -43,6 +47,10 @@ enum class InjectionMethod(
                     Build.VERSION.SDK_INT <= 34 &&
                     Build.VERSION.SECURITY_PATCH != null &&
                     Build.VERSION.SECURITY_PATCH.compareTo("2024-10-01") < 0
+            }
+            ROOT -> {
+                // Root 注入：依赖设备已 Root，运行时再检测 su 是否可用，这里默认可用
+                true
             }
         }
     }

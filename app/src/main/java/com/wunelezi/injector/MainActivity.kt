@@ -704,7 +704,7 @@ class MainActivity : AppCompatActivity() {
             InjectionMethod.START_ANYWHERE_NGWEBVIEW -> startStartAnyWhereInjection(packageName)
             InjectionMethod.START_ANYWHERE_ASSIST -> startStartAnyWhereAssistInjection(packageName)
             InjectionMethod.CVE_2024_0044 -> startCve20240044Injection(packageName)
-            else -> Toast.makeText(this, R.string.toast_injecting, Toast.LENGTH_SHORT).show()
+            InjectionMethod.ROOT -> startRootInjection(packageName)
         }
     }
 
@@ -1117,6 +1117,139 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    // ==================== Root 注入流程 ====================
+
+    /**
+     * Root 注入入口：以 Root 身份下载 dex 并替换目标 app 的 app_ntp0/<版本>/.unzip/ 下的 dex，
+     * 并还原原 classes.dex 的权限/所有者/用户组/修改时间，做到外观无痕。
+     */
+    private fun startRootInjection(targetPackage: String) {
+        showLoadingDialog()
+        Thread {
+            try {
+                // 版本段：优先自定义版本，否则实时检测目标包的 versionName_versionCode
+                val versionSegment = customVersion ?: run {
+                    val pi = packageManager.getPackageInfo(targetPackage, 0)
+                    val vName = pi.versionName ?: "unknown"
+                    val vCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                        pi.longVersionCode.toString()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        pi.versionCode.toString()
+                    }
+                    "${vName}_$vCode"
+                }
+
+                // 1. 下载 dex zip（与 CVE 方式同源）
+                val zipFile = java.io.File(cacheDir, "wnlz_root_$versionSegment.zip")
+                val code = downloadZip("https://caofangkuai.github.io/WNLZ-Injector-dex/$versionSegment.zip", zipFile)
+                if (code == 404) {
+                    runOnUiThread { showNotFoundDialog() }
+                    return@Thread
+                }
+                if (code != 200) {
+                    throw java.io.IOException("下载 dex 失败 HTTP $code")
+                }
+
+                // 2. 解压 dex 到本应用缓存目录（Root 进程可读 /data/data/本包/cache）
+                val extractDir = java.io.File(cacheDir, "wnlz_root_$versionSegment")
+                extractDir.deleteRecursively()
+                extractDir.mkdirs()
+                val dexFiles = unzipZip(zipFile, extractDir)
+                if (dexFiles.isEmpty()) {
+                    throw java.io.IOException("zip 内未找到任何 dex 文件")
+                }
+
+                // 3. 检测 Root 是否可用
+                if (!isRootAvailable()) {
+                    throw IllegalStateException("未检测到 Root 权限，请先授予 Root（如 Magisk 授权）后再试")
+                }
+
+                // 4. 目标目录：/data/data/<包>/app_ntp0/<版本>/.unzip/
+                val targetDir = "/data/data/$targetPackage/app_ntp0/$versionSegment/.unzip"
+
+                // 5. 构造 Root 脚本：复制 dex 并还原原 classes.dex 的权限/所有者/组/修改时间。
+                //    参考文件默认取目录下的 classes.dex；若不存在则退而取目录下首个 .dex；
+                //    若目录内无任何 dex，则退用目录自身的 owner/group 与当前时间。
+                val script = StringBuilder()
+                script.appendLine("#!/system/bin/sh")
+                script.appendLine("DIR='$targetDir'")
+                script.appendLine("mkdir -p \"\$DIR\"")
+                script.appendLine("REF=\"\$DIR/classes.dex\"")
+                script.appendLine("if [ ! -e \"\$REF\" ]; then REF=\$(ls \"\$DIR\"/*.dex 2>/dev/null | head -1); fi")
+                script.appendLine("if [ -e \"\$REF\" ]; then")
+                script.appendLine("  MODE=\$(stat -c %a \"\$REF\")")
+                script.appendLine("  OWN=\$(stat -c %u \"\$REF\")")
+                script.appendLine("  GRP=\$(stat -c %g \"\$REF\")")
+                script.appendLine("  MT=\$(stat -c %Y \"\$REF\")")
+                script.appendLine("else")
+                script.appendLine("  MODE=644")
+                script.appendLine("  OWN=\$(stat -c %u \"\$DIR\" 2>/dev/null || echo 0)")
+                script.appendLine("  GRP=\$(stat -c %g \"\$DIR\" 2>/dev/null || echo 0)")
+                script.appendLine("  MT=\$(date +%s)")
+                script.appendLine("fi")
+                for (dex in dexFiles) {
+                    val src = dex.absolutePath.replace("'", "'\\''")
+                    val name = dex.name.replace("'", "'\\''")
+                    script.appendLine("cp '$src' \"\$DIR/$name\"")
+                    script.appendLine("chmod \$MODE \"\$DIR/$name\"")
+                    script.appendLine("chown \$OWN:\$GRP \"\$DIR/$name\"")
+                    script.appendLine("touch -d @\$MT \"\$DIR/$name\"")
+                }
+                script.appendLine("echo WNLZ_ROOT_DONE")
+                script.appendLine("ls -l \"\$DIR\"")
+
+                // 6. 把脚本写到本应用缓存目录（Root 可读），再经 su 执行
+                val scriptFile = java.io.File(cacheDir, "wnlz_root_$versionSegment.sh")
+                scriptFile.writeText(script.toString())
+
+                val r = rootShell("sh '${scriptFile.absolutePath}'")
+                if (r.exitCode != 0 || !r.output.contains("WNLZ_ROOT_DONE")) {
+                    throw RuntimeException("Root 注入失败 (exit ${r.exitCode}):\n${r.output}")
+                }
+
+                // 7. 成功
+                runOnUiThread {
+                    hideLoadingDialog()
+                    Toast.makeText(this@MainActivity, "注入dex成功", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    hideLoadingDialog()
+                    showInjectErrorDialog(e)
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * 以 Root 身份执行单条 shell 命令（su -c）。
+     *
+     * @param command 要执行的命令（直接交给 su -c，内部如需多行请用脚本文件）
+     * @return 退出码与合并后的输出
+     */
+    private fun rootShell(command: String): ShellResult {
+        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        val out = process.inputStream.bufferedReader().use { it.readText() }
+        val err = process.errorStream.bufferedReader().use { it.readText() }
+        val exitCode = process.waitFor()
+        return ShellResult(exitCode, out + err)
+    }
+
+    /**
+     * 检测设备是否已获取 Root（su 可用且返回 uid=0）。
+     */
+    private fun isRootAvailable(): Boolean {
+        return try {
+            val p = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
+            val out = p.inputStream.bufferedReader().use { it.readText() }
+            p.waitFor()
+            out.contains("uid=0")
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**

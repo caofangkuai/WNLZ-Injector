@@ -1062,17 +1062,25 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                // 3. 从 assets 解压 cve-2024-0044.apk 到本 app 私有目录
-                val apkFile = java.io.File(filesDir, "cve-2024-0044.apk")
+                // 3. 从 assets 解压 cve-2024-0044.apk 到外部存储的 Android/data 目录
+                //    （/storage/emulated/0/Android/data/<包名>/）。该目录 shell 身份可读，
+                //    避免原先放在内部私有目录时 Shizuku(mv) 因无权限读取源文件而 Permission denied。
+                val extDir = getExternalFilesDir(null)
+                    ?: throw java.io.IOException("外部存储不可用，无法导出 cve-2024-0044.apk")
+                val apkFile = java.io.File(extDir, "cve-2024-0044.apk")
                 assets.open("cve-2024-0044.apk").use { input ->
                     apkFile.outputStream().use { input.copyTo(it) }
                 }
 
-                // 4. Shizuku 执行 mv 把 apk 移动到 /data/local/tmp
-                var r = shizukuShell("mv ${apkFile.absolutePath} /data/local/tmp/cve-2024-0044.apk")
+                // 4. Shizuku 复制 apk 到 /data/local/tmp（使用 cp 而非 mv：
+                //    外部 Android/data 目录下的源文件 app 自身可删，无需 shell 去 unlink，
+                //    因此复制成功后由 app 侧删除源文件，规避 shell 删除外部目录的权限问题）
+                var r = shizukuShell("cp ${apkFile.absolutePath} /data/local/tmp/cve-2024-0044.apk")
                 if (r.exitCode != 0) {
-                    throw RuntimeException("mv cve-2024-0044.apk 失败 (exit ${r.exitCode}):\n${r.output}")
+                    throw RuntimeException("复制 cve-2024-0044.apk 失败 (exit ${r.exitCode}):\n${r.output}")
                 }
+                // 源文件已复制，app 侧删除外部目录里的副本
+                runCatching { apkFile.delete() }
 
                 // 5. 获取目标应用 uid
                 val uid = packageManager.getApplicationInfo(targetPackage, 0).uid

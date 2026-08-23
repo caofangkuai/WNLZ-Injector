@@ -64,4 +64,6 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.1'
     implementation 'androidx.activity:activity-ktx:1.6.1'
     implementation 'androidx.fragment:fragment-ktx:1.5.6'
+    // Shizuku：以系统/root 身份执行 shell 命令（CVE-2024-0044 注入方式）
+    implementation 'dev.rikka.shizuku:api:13.1.5'
 }

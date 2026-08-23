@@ -19,24 +19,30 @@ enum class InjectionMethod(
     START_ANYWHERE_ASSIST(
         displayName = "StartAnyWhere(AssistActivity)",
         description = "利用 Intent 重定向实现任意Activity启动"
+    ),
+    CVE_2024_0044(
+        displayName = "CVE-2024-0044",
+        description = "利用 Shizuku + mcinject 实现任意Activity启动"
     );
 
     /**
      * 检测当前设备是否支持此注入方式。
-     *
-     * StartAnyWhere 条件:
-     *  - SDK_INT >= 30 (Android 11)
-     *  - SDK_INT <= 33 (Android 13)
-     *  - SECURITY_PATCH != null
-     *  - SECURITY_PATCH < "2023-03-01"
      */
     fun isSupported(): Boolean {
         return when (this) {
             START_ANYWHERE_NGWEBVIEW, START_ANYWHERE_ASSIST -> {
+                // StartAnyWhere：Android 11-13 且安全补丁早于 2023-03-01
                 Build.VERSION.SDK_INT >= 30 &&
                     Build.VERSION.SDK_INT <= 33 &&
                     Build.VERSION.SECURITY_PATCH != null &&
                     Build.VERSION.SECURITY_PATCH.compareTo("2023-03-01") < 0
+            }
+            CVE_2024_0044 -> {
+                // CVE-2024-0044：Android 12-14 且安全补丁早于 2024-10-01
+                Build.VERSION.SDK_INT >= 31 &&
+                    Build.VERSION.SDK_INT <= 34 &&
+                    Build.VERSION.SECURITY_PATCH != null &&
+                    Build.VERSION.SECURITY_PATCH.compareTo("2024-10-01") < 0
             }
         }
     }

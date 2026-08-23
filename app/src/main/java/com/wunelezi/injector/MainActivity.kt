@@ -3,10 +3,19 @@ package com.wunelezi.injector
 import android.app.Dialog
 import android.content.ComponentName
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Binder
 import android.os.Bundle
+import android.os.IBinder
+import android.os.RemoteException
+import com.wunelezi.injector.BuildConfig
+import com.wunelezi.injector.IShizukuShell
+import com.wunelezi.injector.ShizukuShellService
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.Log
@@ -70,6 +79,47 @@ class MainActivity : AppCompatActivity() {
 
     /** 待处理的 Shizuku 权限授予回调 */
     private var shizukuPermissionCallback: ((Boolean) -> Unit)? = null
+
+    /** Shizuku 用户服务参数：指向本应用内、由 Shizuku 以 root/shell 身份拉起的 ShizukuShellService */
+    private val shizukuUserServiceArgs by lazy {
+        Shizuku.UserServiceArgs(
+            ComponentName(BuildConfig.APPLICATION_ID, ShizukuShellService::class.java.name)
+        ).daemon(false).tag("wnlz-cve")
+    }
+
+    /** Shizuku 用户服务连接，异步获取 IShizukuShell binder */
+    private val shizukuServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            shizukuShellBinder = IShizukuShell.Stub.asInterface(binder)
+            shizukuBindLatch.countDown()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            shizukuShellBinder = null
+        }
+    }
+
+    /** 当前已绑定的 Shizuku 用户服务 binder（null 表示尚未绑定） */
+    @Volatile
+    private var shizukuShellBinder: IShizukuShell? = null
+
+    /** 绑定等待闩，每次重新绑定前重置 */
+    private var shizukuBindLatch = CountDownLatch(1)
+
+    /** 绑定阶段捕获的异常（若有） */
+    @Volatile
+    private var shizukuBindError: Throwable? = null
+
+    /** Shizuku binder 已连接监听（官方生命周期：binder 存活时才能调用 Shizuku API） */
+    private val shizukuBinderReceivedListener = Shizuku.OnBinderReceivedListener {
+        Log.d("WNLZ", "Shizuku binder received")
+    }
+
+    /** Shizuku binder 断开监听（官方生命周期） */
+    private val shizukuBinderDeadListener = Shizuku.OnBinderDeadListener {
+        shizukuShellBinder = null
+        Log.d("WNLZ", "Shizuku binder dead")
+    }
 
     /** 加载对话框 */
     private var loadingDialog: Dialog? = null
@@ -165,6 +215,10 @@ class MainActivity : AppCompatActivity() {
 
         // 注册 Shizuku 权限请求结果回调（CVE-2024-0044 注入方式需要）
         Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
+
+        // 注册 Shizuku binder 生命周期监听（官方要求：binder 存活时才能调用 Shizuku API）
+        Shizuku.addBinderReceivedListenerSticky(shizukuBinderReceivedListener)
+        Shizuku.addBinderDeadListener(shizukuBinderDeadListener)
     }
 
     /** Shizuku 权限请求结果监听 */
@@ -179,6 +233,13 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
+        Shizuku.removeBinderReceivedListener(shizukuBinderReceivedListener)
+        Shizuku.removeBinderDeadListener(shizukuBinderDeadListener)
+        // 退出前解绑用户服务，避免残留 user_service 进程
+        if (shizukuShellBinder != null) {
+            runCatching { Shizuku.unbindUserService(shizukuUserServiceArgs, shizukuServiceConnection, true) }
+            shizukuShellBinder = null
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -889,33 +950,63 @@ class MainActivity : AppCompatActivity() {
     private data class ShellResult(val exitCode: Int, val output: String)
 
     /**
-     * 通过 Shizuku 以系统/root 身份执行 shell 命令。
+     * 通过 Shizuku 用户服务（官方 UserService，替代已废弃的 newProcess）以系统/root 身份执行 shell 命令。
      *
-     * 注意：Shizuku 13.x 的 Shizuku.newProcess(...) 为 private 静态方法，故通过反射调用；
-     * proguard-rules.pro 中已 keep rikka.shizuku.** 以免 release 构建被重命名/内联。
+     * 流程：首次调用时 bindUserService 拉起本应用的 ShizukuShellService（运行在具有 root/shell
+     * 身份的 user_service 进程中），经 AIDL 调用 exec 执行命令并返回退出码与输出；binder 在
+     * runCveFlow 结束时统一解绑。
      *
      * @param command 要执行的命令（经 sh -c 执行）
      * @param env     环境变量数组（形如 "KEY=VALUE"，可用于携带含换行的 PAYLOAD）
      * @return 退出码与合并后的输出
      */
     private fun shizukuShell(command: String, env: Array<String>? = null): ShellResult {
-        val newProcess = Shizuku::class.java.getDeclaredMethod(
-            "newProcess",
-            Array<String>::class.java,
-            Array<String>::class.java,
-            String::class.java
-        ).apply { isAccessible = true }
-        val process = newProcess.invoke(null, arrayOf("sh", "-c", command), env, null) as Process
-        val out = process.inputStream.bufferedReader().use { it.readText() }
-        val err = process.errorStream.bufferedReader().use { it.readText() }
-        val exitCode = process.waitFor()
-        return ShellResult(exitCode, out + err)
+        if (!Shizuku.pingBinder()) {
+            throw IllegalStateException("Shizuku 未连接")
+        }
+        if (shizukuShellBinder == null) {
+            // bindUserService 内部依赖 Looper，必须在有 Looper 的线程（主线程）发起；
+            // 当前后台线程仅负责 await 绑定结果。
+            shizukuBindLatch = CountDownLatch(1)
+            val latch = shizukuBindLatch
+            shizukuBindError = null
+            runOnUiThread {
+                try {
+                    Shizuku.bindUserService(shizukuUserServiceArgs, shizukuServiceConnection)
+                } catch (e: Throwable) {
+                    shizukuBindError = e
+                    latch.countDown()
+                }
+            }
+            if (!latch.await(15, TimeUnit.SECONDS)) {
+                throw RuntimeException("绑定 Shizuku 用户服务超时")
+            }
+            shizukuBindError?.let { throw it }
+        }
+        val binder = shizukuShellBinder ?: throw IllegalStateException("Shizuku 用户服务未就绪")
+        return try {
+            val bundle = binder.exec(command, env)
+            ShellResult(bundle.getInt("exit", -1), bundle.getString("out") ?: "")
+        } catch (e: RemoteException) {
+            throw RuntimeException("Shizuku 用户服务调用失败: ${e.message}", e)
+        }
     }
 
     /**
-     * 确保已获得 Shizuku 权限：未连接则提示，已授权直接回调，否则发起权限请求。
+     * 确保已获得 Shizuku 权限（官方流程）：
+     *  1. isPreV11() 过低版本不支持；
+     *  2. pingBinder() 未连接则提示；
+     *  3. 已授权直接回调；
+     *  4. shouldShowRequestPermissionRationale() 用户曾拒绝且不再提示，引导手动授权；
+     *  5. 否则发起 requestPermission，结果经 OnRequestPermissionResultListener 回调。
      */
     private fun ensureShizukuPermission(onGranted: () -> Unit) {
+        if (Shizuku.isPreV11()) {
+            runOnUiThread {
+                showErrorDialog("Shizuku 版本过低", Exception("Shizuku 版本过低，请升级 Shizuku 后重试。"))
+            }
+            return
+        }
         if (!Shizuku.pingBinder()) {
             runOnUiThread {
                 showErrorDialog("Shizuku 未连接", Exception("Shizuku 服务未运行，请先启动 Shizuku（adb / 已 root 的 Shizuku）后再试。"))
@@ -924,6 +1015,15 @@ class MainActivity : AppCompatActivity() {
         }
         if (Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             onGranted()
+            return
+        }
+        if (Shizuku.shouldShowRequestPermissionRationale()) {
+            runOnUiThread {
+                showErrorDialog(
+                    "Shizuku 权限被拒绝",
+                    Exception("用户此前拒绝了 Shizuku 权限且选择不再提示。请在 Shizuku 应用中手动为本应用授权后重试。")
+                )
+            }
             return
         }
         shizukuPermissionCallback = { granted ->
@@ -1042,6 +1142,12 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     hideLoadingDialog()
                     showInjectErrorDialog(e)
+                }
+            } finally {
+                // 解绑 Shizuku 用户服务，释放 user_service 进程
+                if (shizukuShellBinder != null) {
+                    runCatching { Shizuku.unbindUserService(shizukuUserServiceArgs, shizukuServiceConnection, true) }
+                    shizukuShellBinder = null
                 }
             }
         }.start()

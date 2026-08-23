@@ -52,6 +52,10 @@ android {
 
     buildFeatures {
         viewBinding true
+        // 启用 AIDL：Shizuku 官方 UserService 通过 IShizukuShell.aidl 与 ShizukuShellService 通信
+        aidl true
+        // AGP 8.0 起 BuildConfig 默认关闭，这里显式开启（用于获取 applicationId）
+        buildConfig true
     }
 }
 
@@ -65,5 +69,8 @@ dependencies {
     implementation 'androidx.activity:activity-ktx:1.6.1'
     implementation 'androidx.fragment:fragment-ktx:1.5.6'
     // Shizuku：以系统/root 身份执行 shell 命令（CVE-2024-0044 注入方式）
+    // api：Shizuku API（bindUserService 等）
+    // provider：官方要求的 ShizukuProvider，让 Shizuku 识别并连接本应用
     implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
 }

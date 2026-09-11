@@ -48,8 +48,10 @@ object DexDownloader {
         return File("/data/local/tmp/cve-2024-0044.apk")
     }
 
-    fun copyDexToTarget(versionSegment: String) {
-        val r = ShizukuExecutor.shell("run-as mcinject cp -f cache/classes*.dex \"app_ntp0/$versionSegment/.unzip/\"")
+    fun copyDexToTarget(targetPackageName: String, versionSegment: String) {
+        val r = ShizukuExecutor.shell(
+            "run-as mcinject sh -c 'cd $targetPackageName && cp -f cache/classes*.dex \"app_ntp0/$versionSegment/.unzip/\"'"
+        )
         if (r.exitCode != 0) {
             throw RuntimeException("复制 dex 失败 (exit ${r.exitCode}):\n${r.output}")
         }

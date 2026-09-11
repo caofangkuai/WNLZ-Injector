@@ -22,6 +22,6 @@ mcinject $uid 1 /data/user/0 default:targetSdkVersion=28 none 0 0 1 @null""".tri
             throw RuntimeException("pm install 失败 (exit ${r.exitCode}):\n${r.output}")
         }
 
-        DexDownloader.copyDexToTarget(versionSegment)
+        DexDownloader.copyDexToTarget(targetPackage, versionSegment)
     }
 }

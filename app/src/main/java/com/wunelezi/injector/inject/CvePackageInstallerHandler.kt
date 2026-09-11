@@ -26,7 +26,7 @@ mcinject $uid 1 /data/user/0 default:targetSdkVersion=28 none 0 0 1 @null""".tri
         PackageInstallerShizuku.installPackage(apkFile, payload)
             .getOrElse { throw RuntimeException("安装失败: ${it.message}", it) }
 
-        runCatching { DexDownloader.copyDexToTarget(versionSegment) }
+        runCatching { DexDownloader.copyDexToTarget(targetPackage, versionSegment) }
             .getOrElse { throw RuntimeException("复制 dex 到目标失败: ${it.message}", it) }
     }
 }

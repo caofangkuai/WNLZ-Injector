@@ -94,10 +94,19 @@ object PackageInstallerShizuku {
      * framework.jar 里的 Java `...$Stub`，它没有 `Companion` 字段，于是抛出
      * "No field Companion of type ...$Stub$Companion"。
      * 用反射按类名查找即可绕开 Kotlin 伴生对象的字段访问。
+     *
+     * "$Stub" 后缀刻意在运行时由 char 数组拼出：若写成字符串常量，R8 会在编译期把
+     * `Class.forName("...$Stub")` 解析为 app 内的同名桩类，并注入
+     * `sget-object ...$Stub.Companion` 以保留类初始化副作用；该引用运行时解析到
+     * framework.jar 的系统类，系统类没有 Companion 字段，release 下会抛
+     * NoSuchFieldError（debug 不混淆所以正常）。拆成运行时拼接后 R8 无法静态解析，
+     * 反射保持原样，Class.forName 在运行时才解析到系统类。
      */
-    private fun asInterfaceViaReflection(stubClassName: String, binder: IBinder?): IInterface? {
+    private val STUB_SUFFIX = charArrayOf('$', 'S', 't', 'u', 'b')
+
+    private fun asInterfaceViaReflection(interfaceName: String, binder: IBinder?): IInterface? {
         if (binder == null) return null
-        val stubClass = Class.forName(stubClassName)
+        val stubClass = Class.forName(interfaceName + String(STUB_SUFFIX))
         val asInterfaceMethod = stubClass.getMethod("asInterface", IBinder::class.java)
         return asInterfaceMethod.invoke(null, binder) as? IInterface
     }
@@ -111,9 +120,7 @@ object PackageInstallerShizuku {
             }
 
             val iPackageManager = runCatching {
-                val stubClass = Class.forName("android.content.pm.IPackageManager\$Stub")
-                val asInterfaceMethod = stubClass.getMethod("asInterface", IBinder::class.java)
-                asInterfaceMethod.invoke(null, packageBinder)
+                asInterfaceViaReflection("android.content.pm.IPackageManager", packageBinder)
             }.getOrElse { throw RuntimeException("创建 IPackageManager 失败: ${it.message}", it) }
 
             if (iPackageManager == null) {
@@ -130,9 +137,7 @@ object PackageInstallerShizuku {
             }
 
             val iPackageInstaller = runCatching {
-                val stubClass = Class.forName("android.content.pm.IPackageInstaller\$Stub")
-                val asInterfaceMethod = stubClass.getMethod("asInterface", IBinder::class.java)
-                asInterfaceMethod.invoke(null, ShizukuBinderWrapper(installerBinder))
+                asInterfaceViaReflection("android.content.pm.IPackageInstaller", ShizukuBinderWrapper(installerBinder))
             }.getOrElse { throw RuntimeException("创建 IPackageInstaller 失败: ${it.message}", it) }
 
             if (iPackageInstaller == null) {
@@ -198,7 +203,7 @@ object PackageInstallerShizuku {
             val iBinder = iInterface.asBinder()
             val wrapped = ShizukuBinderWrapper(iBinder)
             val wrappedSession = asInterfaceViaReflection(
-                "android.content.pm.IPackageInstallerSession\$Stub", wrapped
+                "android.content.pm.IPackageInstallerSession", wrapped
             ) ?: throw RuntimeException("IPackageInstallerSession.Stub.asInterface 返回 null")
 
             try {
@@ -335,7 +340,7 @@ object PackageInstallerShizuku {
                             data.readInt(),
                             if (data.readInt() != 0) Intent.CREATOR.createFromParcel(data) else null,
                             data.readString(),
-                            asInterfaceViaReflection("android.content.IIntentReceiver\$Stub", data.readStrongBinder()) as? IIntentReceiver,
+                            asInterfaceViaReflection("android.content.IIntentReceiver", data.readStrongBinder()) as? IIntentReceiver,
                             data.readString(),
                             if (data.readInt() != 0) Bundle.CREATOR.createFromParcel(data) else null
                         )

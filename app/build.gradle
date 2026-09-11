@@ -54,7 +54,11 @@ android {
         viewBinding true
         // AGP 8.0 起 BuildConfig 默认关闭，这里显式开启（用于获取 applicationId）
         buildConfig true
-        aidl = true
+        // 关闭 AIDL：src/main/aidl 下的 IIntentSender/IIntentReceiver 会生成 Java 类，
+        // 与 src/main/java/android/content 下的同名 Kotlin 桩类重复，导致 D8 报
+        // "Type android.content.IIntentSender is defined multiple times"。
+        // 这两个接口由 Kotlin 桩提供即可，无需 AIDL 生成。
+        aidl = false
     }
 }
 
@@ -75,5 +79,9 @@ dependencies {
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
     compileOnly(project(":hidden-api"))
-    compileOnly 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
+    // hiddenapibypass 必须在运行时可用：PackageInstaller/Shizuku 注入流程依赖反射访问
+    // 非 SDK 接口（getPackageInstaller、PackageInstaller 构造、Session.mSession 等），
+    // 若仅为 compileOnly，APK 内不含该库，反射会被隐藏 API 限制拦截并抛出
+    // NoSuchMethodException（如 "IPackageManager$Stub$Proxy.getPackageInstaller []"）。
+    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
 }

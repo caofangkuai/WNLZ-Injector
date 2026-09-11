@@ -14,6 +14,7 @@ import android.os.IBinder
 import android.os.IInterface
 import android.os.Parcel
 import android.os.ServiceManager
+import org.lsposed.hiddenapibypass.HiddenApiBypass
 import rikka.shizuku.ShizukuBinderWrapper
 import java.io.File
 import java.lang.reflect.Field
@@ -21,6 +22,16 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 object PackageInstallerShizuku {
+
+    init {
+        // 解除本进程的非 SDK 接口访问限制。
+        // 反射调用 IPackageManager.getPackageInstaller()、PackageInstaller 隐藏构造函数、
+        // Session.mSession 字段、IntentSender(IIntentSender) 构造函数等都属于 hidden API，
+        // 未豁免时 Class.getMethod 会直接抛出 NoSuchMethodException。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            HiddenApiBypass.addHiddenApiExemptions("")
+        }
+    }
 
     private fun getDeclaredField(clazz: Class<*>, name: String): Field? {
         return try {
@@ -73,6 +84,22 @@ object PackageInstallerShizuku {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * 通过反射调用系统 Stub 的 asInterface。
+     *
+     * 不能直接写 `IPackageInstallerSession.Stub.asInterface(...)`：本应用的桩类是用 Kotlin 写的，
+     * 编译产物会访问 `...$Stub.Companion` 字段；而运行时类加载器父优先，实际加载的是
+     * framework.jar 里的 Java `...$Stub`，它没有 `Companion` 字段，于是抛出
+     * "No field Companion of type ...$Stub$Companion"。
+     * 用反射按类名查找即可绕开 Kotlin 伴生对象的字段访问。
+     */
+    private fun asInterfaceViaReflection(stubClassName: String, binder: IBinder?): IInterface? {
+        if (binder == null) return null
+        val stubClass = Class.forName(stubClassName)
+        val asInterfaceMethod = stubClass.getMethod("asInterface", IBinder::class.java)
+        return asInterfaceMethod.invoke(null, binder) as? IInterface
     }
 
     private fun getPackageInstaller(installerPackageName: String, userId: Int): Result<PackageInstaller> {
@@ -170,8 +197,9 @@ object PackageInstallerShizuku {
 
             val iBinder = iInterface.asBinder()
             val wrapped = ShizukuBinderWrapper(iBinder)
-            val wrappedSession = IPackageInstallerSession.Stub.asInterface(wrapped)
-                ?: throw RuntimeException("IPackageInstallerSession.Stub.asInterface 返回 null")
+            val wrappedSession = asInterfaceViaReflection(
+                "android.content.pm.IPackageInstallerSession\$Stub", wrapped
+            ) ?: throw RuntimeException("IPackageInstallerSession.Stub.asInterface 返回 null")
 
             try {
                 field.set(session, wrappedSession)
@@ -307,7 +335,7 @@ object PackageInstallerShizuku {
                             data.readInt(),
                             if (data.readInt() != 0) Intent.CREATOR.createFromParcel(data) else null,
                             data.readString(),
-                            IIntentReceiver.Stub.asInterface(data.readStrongBinder()),
+                            asInterfaceViaReflection("android.content.IIntentReceiver\$Stub", data.readStrongBinder()) as? IIntentReceiver,
                             data.readString(),
                             if (data.readInt() != 0) Bundle.CREATOR.createFromParcel(data) else null
                         )

@@ -34,3 +34,15 @@
 
 # 保留 ShizukuProvider（provider 依赖自动注册），防止被 R8/资源处理误删
 -keep class rikka.shizuku.ShizukuProvider { *; }
+
+# hiddenapibypass：解除非 SDK 接口访问限制，注入流程强依赖，release 下必须保留。
+# 该库内部通过 Unsafe/反射访问 VMRuntime，混淆或裁剪会导致豁免失效。
+-keep class org.lsposed.hiddenapibypass.** { *; }
+
+# android.* 隐藏 API 桩类必须保留原始类名。
+# 这些类运行时会被 framework.jar 中的同名类（父类加载器优先）覆盖，仅用于编译期类型检查。
+# 若被 R8 重命名（实测 IPackageManager$Stub -> b.b），Class.forName("android.content.pm.Xxx$Stub")
+# 的字符串会被同步改写成混淆名，于是加载到 app 内的桩类而非系统类：
+#   1. asInterface 位于 Kotlin companion，Stub 上无该方法 -> NoSuchMethodException；
+#   2. IPackageInstaller::class.java 等类字面量也指向 app 桩类，导致 PackageInstaller 构造函数匹配失败。
+-keep class android.content.** { *; }

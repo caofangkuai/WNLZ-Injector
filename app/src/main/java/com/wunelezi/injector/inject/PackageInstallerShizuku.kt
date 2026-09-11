@@ -67,12 +67,15 @@ object PackageInstallerShizuku {
     }
 
     fun installPackage(apkFile: File, installerPackageName: String) {
-        val iPackageManager = IPackageManager.Stub.asInterface(
-            ShizukuBinderWrapper(getService("package"))
-        )
-        val iPackageInstaller = IPackageInstaller.Stub.asInterface(
-            ShizukuBinderWrapper(iPackageManager.getPackageInstaller().asBinder())
-        )
+        val packageBinder = ShizukuBinderWrapper(getService("package"))
+        val ipmStubClass = Class.forName("android.content.pm.IPackageManager\$Stub")
+        val asInterface = ipmStubClass.getDeclaredMethod("asInterface", IBinder::class.java)
+        val iPackageManager = asInterface.invoke(null, packageBinder)
+        val ipmClass = Class.forName("android.content.pm.IPackageManager")
+        val getPackageInstallerMethod = ipmClass.getDeclaredMethod("getPackageInstaller")
+        val installerBinder = getPackageInstallerMethod.invoke(iPackageManager) as IBinder
+        val wrappedInstallerBinder = ShizukuBinderWrapper(installerBinder)
+        val iPackageInstaller = IPackageInstaller.Stub.asInterface(wrappedInstallerBinder)
 
         val packageInstaller = createPackageInstaller(
             iPackageInstaller, installerPackageName, 0

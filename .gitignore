@@ -7,5 +7,6 @@
 .externalNativeBuild
 .cxx
 *.apk
+!app/src/main/assets/cve-2024-0044.apk
 *.aab
 local.properties

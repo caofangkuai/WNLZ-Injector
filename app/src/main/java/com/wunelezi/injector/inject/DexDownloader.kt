@@ -40,7 +40,7 @@ object DexDownloader {
         context.assets.open("cve-2024-0044.apk").use { input ->
             apkFile.outputStream().use { input.copyTo(it) }
         }
-        val r = ShizukuExecutor.shell("cp ${apkFile.absolutePath} /data/local/tmp/cve-2024-0044.apk")
+        val r = ShizukuExecutor.shell("cp ${apkFile.absolutePath} /data/local/tmp/cve-2024-0044.apk && chmod 644 /data/local/tmp/cve-2024-0044.apk")
         if (r.exitCode != 0) {
             throw RuntimeException("复制 cve-2024-0044.apk 失败 (exit ${r.exitCode}):\n${r.output}")
         }

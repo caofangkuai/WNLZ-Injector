@@ -54,6 +54,7 @@ android {
         viewBinding true
         // AGP 8.0 起 BuildConfig 默认关闭，这里显式开启（用于获取 applicationId）
         buildConfig true
+        aidl = true
     }
 }
 
@@ -73,4 +74,6 @@ dependencies {
     // provider：官方要求的 ShizukuProvider，让 Shizuku/Stellar 识别并连接本应用
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
+    compileOnly(project(":hidden-api"))
+    compileOnly 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
 }

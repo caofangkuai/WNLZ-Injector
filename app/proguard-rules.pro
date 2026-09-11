@@ -23,6 +23,9 @@
     public <init>();
 }
 
+# 保留所有继承 IInterface 的类（AIDL 生成的 Stub/Proxy 等）
+-keep public interface ** extends android.os.IInterface {*;}
+
 # Shizuku：保留 rikka.shizuku 全部成员。
 # 本应用通过反射调用 Shizuku.newProcess（Rikka 13.x 中为 private），
 # R8 必须保留该方法及所在类，否则运行时找不到 newProcess。

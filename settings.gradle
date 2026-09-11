@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "WNLZ-Injector"
 include ':app'
+include ':hidden-api'

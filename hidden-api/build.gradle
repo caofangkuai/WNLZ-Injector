@@ -1,0 +1,10 @@
+apply plugin: 'com.android.library'
+
+android {
+    namespace = "com.rosan.hidden_api"
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 19
+    }
+}

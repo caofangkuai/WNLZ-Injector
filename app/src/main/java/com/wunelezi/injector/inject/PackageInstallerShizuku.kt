@@ -13,136 +13,247 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.IInterface
 import android.os.Parcel
+import android.os.ServiceManager
 import rikka.shizuku.ShizukuBinderWrapper
 import java.io.File
-import java.lang.reflect.Constructor
 import java.lang.reflect.Field
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 object PackageInstallerShizuku {
 
-    private val packageInstallerConstructor: Constructor<*> by lazy {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            PackageInstaller::class.java.getDeclaredConstructor(
-                IPackageInstaller::class.java,
-                String::class.java,
-                String::class.java,
-                Int::class.javaPrimitiveType
-            ).apply { isAccessible = true }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PackageInstaller::class.java.getDeclaredConstructor(
-                IPackageInstaller::class.java,
-                String::class.java,
-                Int::class.javaPrimitiveType
-            ).apply { isAccessible = true }
-        } else {
-            PackageInstaller::class.java.getDeclaredConstructor(
-                android.content.Context::class.java,
-                PackageInstaller::class.java,
-                IPackageInstaller::class.java,
-                String::class.java,
-                Int::class.javaPrimitiveType
-            ).apply { isAccessible = true }
-        }
-    }
-
-    private val sessionIBinderField: Field by lazy {
-        val field = PackageInstaller.Session::class.java.getDeclaredField("mSession")
-        field.isAccessible = true
-        field
-    }
-
-    private val installFlagsField: Field by lazy {
-        val field = PackageInstaller.SessionParams::class.java.getDeclaredField("installFlags")
-        field.isAccessible = true
-        field
-    }
-
-    private val serviceManagerClass = Class.forName("android.os.ServiceManager")
-
-    private fun getService(name: String): IBinder {
-        val method = serviceManagerClass.getDeclaredMethod("getService", String::class.java)
-        return method.invoke(null, name) as IBinder
-    }
-
-    fun installPackage(apkFile: File, installerPackageName: String) {
-        val packageBinder = ShizukuBinderWrapper(getService("package"))
-        val ipmStubClass = Class.forName("android.content.pm.IPackageManager\$Stub")
-        val asInterface = ipmStubClass.getDeclaredMethod("asInterface", IBinder::class.java)
-        val iPackageManager = asInterface.invoke(null, packageBinder)
-        val ipmClass = Class.forName("android.content.pm.IPackageManager")
-        val getPackageInstallerMethod = ipmClass.getDeclaredMethod("getPackageInstaller")
-        val installerBinder = getPackageInstallerMethod.invoke(iPackageManager) as IBinder
-        val wrappedInstallerBinder = ShizukuBinderWrapper(installerBinder)
-        val iPackageInstaller = IPackageInstaller.Stub.asInterface(wrappedInstallerBinder)
-
-        val packageInstaller = createPackageInstaller(
-            iPackageInstaller, installerPackageName, 0
-        )
-
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-        installFlagsField.setInt(params, installFlagsField.getInt(params) or 0x00000002)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
-        }
-        params.setInstallerPackageName(installerPackageName)
-
-        val sessionId = packageInstaller.createSession(params)
-        val session = packageInstaller.openSession(sessionId)
-
-        wrapSessionIBinder(session)
-
-        session.openWrite("base.apk", 0, apkFile.length()).use { outputStream ->
-            apkFile.inputStream().use { inputStream ->
-                inputStream.copyTo(outputStream)
+    private fun getDeclaredField(clazz: Class<*>, name: String): Field? {
+        return try {
+            for (field in clazz.declaredFields) {
+                if (field.name != name) continue
+                field.isAccessible = true
+                return field
             }
-            session.fsync(outputStream)
-        }
-
-        val receiver = LocalIntentReceiver()
-        session.commit(receiver.getIntentSender())
-        session.close()
-
-        verifyInstallResult(receiver)
-    }
-
-    private fun createPackageInstaller(
-        iPackageInstaller: IPackageInstaller,
-        installerPackageName: String,
-        userId: Int
-    ): PackageInstaller {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            packageInstallerConstructor.newInstance(
-                iPackageInstaller, installerPackageName, null, userId
-            ) as PackageInstaller
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            packageInstallerConstructor.newInstance(
-                iPackageInstaller, installerPackageName, userId
-            ) as PackageInstaller
-        } else {
-            packageInstallerConstructor.newInstance(
-                null, null, iPackageInstaller, installerPackageName, userId
-            ) as PackageInstaller
+            null
+        } catch (e: Exception) {
+            null
         }
     }
 
-    private fun wrapSessionIBinder(session: PackageInstaller.Session) {
-        val iSession = sessionIBinderField.get(session) as IInterface
-        val wrappedBinder = ShizukuBinderWrapper(iSession.asBinder())
-        sessionIBinderField.set(
-            session,
-            IPackageInstallerSession.Stub.asInterface(wrappedBinder)
-        )
+    private fun getDeclaredField(clazz: Class<*>, name: String, type: Class<*>): Field? {
+        return try {
+            var field = getDeclaredField(clazz, name)
+            if (field?.type != type) {
+                for (f in clazz.declaredFields) {
+                    if (f.type != type) continue
+                    f.isAccessible = true
+                    field = f
+                    break
+                }
+            }
+            field
+        } catch (e: Exception) {
+            null
+        }
     }
 
-    private fun verifyInstallResult(receiver: LocalIntentReceiver) {
-        val intent = receiver.getResult()
-        val status = intent.getIntExtra(
-            PackageInstaller.EXTRA_STATUS,
-            PackageInstaller.STATUS_FAILURE
-        )
+    private fun getDeclaredConstructor(clazz: Class<*>, vararg parameterTypes: Class<*>): java.lang.reflect.Constructor<*>? {
+        return try {
+            for (constructor in clazz.declaredConstructors) {
+                val expectedTypes = constructor.parameterTypes
+                if (expectedTypes.size != parameterTypes.size) continue
+                var match = true
+                for (i in expectedTypes.indices) {
+                    if (expectedTypes[i] != parameterTypes[i]) {
+                        match = false
+                        break
+                    }
+                }
+                if (match) {
+                    constructor.isAccessible = true
+                    return constructor
+                }
+            }
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun getPackageInstaller(installerPackageName: String, userId: Int): Result<PackageInstaller> {
+        return runCatching {
+            val packageBinder = try {
+                ShizukuBinderWrapper(ServiceManager.getService("package"))
+            } catch (e: Exception) {
+                throw RuntimeException("获取 package 服务失败: ${e.message}", e)
+            }
+
+            val iPackageManager = runCatching {
+                val stubClass = Class.forName("android.content.pm.IPackageManager\$Stub")
+                val asInterfaceMethod = stubClass.getMethod("asInterface", IBinder::class.java)
+                asInterfaceMethod.invoke(null, packageBinder)
+            }.getOrElse { throw RuntimeException("创建 IPackageManager 失败: ${it.message}", it) }
+
+            if (iPackageManager == null) {
+                throw RuntimeException("IPackageManager.Stub.asInterface 返回 null")
+            }
+
+            val installerBinder = try {
+                val pmClass = iPackageManager.javaClass
+                val getPackageInstallerMethod = pmClass.getMethod("getPackageInstaller")
+                val iPackageInstallerObj = getPackageInstallerMethod.invoke(iPackageManager)
+                (iPackageInstallerObj as IInterface).asBinder()
+            } catch (e: Exception) {
+                throw RuntimeException("获取 packageInstaller 失败: ${e.message}", e)
+            }
+
+            val iPackageInstaller = runCatching {
+                val stubClass = Class.forName("android.content.pm.IPackageInstaller\$Stub")
+                val asInterfaceMethod = stubClass.getMethod("asInterface", IBinder::class.java)
+                asInterfaceMethod.invoke(null, ShizukuBinderWrapper(installerBinder))
+            }.getOrElse { throw RuntimeException("创建 IPackageInstaller 失败: ${it.message}", it) }
+
+            if (iPackageInstaller == null) {
+                throw RuntimeException("IPackageInstaller.Stub.asInterface 返回 null")
+            }
+
+            val constructor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                getDeclaredConstructor(
+                    PackageInstaller::class.java,
+                    IPackageInstaller::class.java,
+                    String::class.java,
+                    String::class.java,
+                    Int::class.java,
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                getDeclaredConstructor(
+                    PackageInstaller::class.java,
+                    IPackageInstaller::class.java,
+                    String::class.java,
+                    Int::class.java,
+                )
+            } else {
+                getDeclaredConstructor(
+                    PackageInstaller::class.java,
+                    android.content.Context::class.java,
+                    PackageInstaller::class.java,
+                    IPackageInstaller::class.java,
+                    String::class.java,
+                    Int::class.java
+                )
+            }
+
+            if (constructor == null) {
+                throw RuntimeException("未找到 PackageInstaller 构造函数 (SDK: ${Build.VERSION.SDK_INT})")
+            }
+
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    constructor.newInstance(iPackageInstaller, installerPackageName, null, userId) as PackageInstaller
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    constructor.newInstance(iPackageInstaller, installerPackageName, userId) as PackageInstaller
+                } else {
+                    constructor.newInstance(null, null, iPackageInstaller, installerPackageName, userId) as PackageInstaller
+                }
+            } catch (e: Exception) {
+                throw RuntimeException("PackageInstaller 构造失败: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun setSessionIBinder(session: PackageInstaller.Session): Result<Unit> {
+        return runCatching {
+            val field = getDeclaredField(
+                session::class.java, "mSession", IPackageInstallerSession::class.java
+            ) ?: throw RuntimeException("未找到 Session.mSession 字段")
+
+            val iInterface = try {
+                field.get(session) as? IInterface
+            } catch (e: Exception) {
+                throw RuntimeException("获取 mSession 值失败: ${e.message}", e)
+            } ?: throw RuntimeException("mSession 为 null")
+
+            val iBinder = iInterface.asBinder()
+            val wrapped = ShizukuBinderWrapper(iBinder)
+            val wrappedSession = IPackageInstallerSession.Stub.asInterface(wrapped)
+                ?: throw RuntimeException("IPackageInstallerSession.Stub.asInterface 返回 null")
+
+            try {
+                field.set(session, wrappedSession)
+            } catch (e: Exception) {
+                throw RuntimeException("设置 mSession 失败: ${e.message}", e)
+            }
+        }
+    }
+
+    fun installPackage(apkFile: File, installerPackageName: String): Result<Unit> {
+        return runCatching {
+            if (!apkFile.exists()) {
+                throw RuntimeException("APK 文件不存在: ${apkFile.absolutePath}")
+            }
+            if (!apkFile.canRead()) {
+                throw RuntimeException("APK 文件不可读: ${apkFile.absolutePath}")
+            }
+
+            val packageInstaller = getPackageInstaller(installerPackageName, 0).getOrElse {
+                throw RuntimeException("获取 PackageInstaller 失败: ${it.message}", it)
+            }
+
+            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            val installFlagsField = getDeclaredField(PackageInstaller.SessionParams::class.java, "installFlags")
+            if (installFlagsField != null) {
+                try {
+                    installFlagsField.setInt(params, installFlagsField.getInt(params) or 0x00000002)
+                } catch (e: Exception) {
+                    // ignore: installFlags 设置失败不影响核心流程
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
+            params.setInstallerPackageName(installerPackageName)
+
+            val sessionId = try {
+                packageInstaller.createSession(params)
+            } catch (e: Exception) {
+                throw RuntimeException("创建安装会话失败: ${e.message}", e)
+            }
+
+            val session = try {
+                packageInstaller.openSession(sessionId)
+            } catch (e: Exception) {
+                throw RuntimeException("打开安装会话失败: ${e.message}", e)
+            }
+
+            setSessionIBinder(session).getOrElse {
+                throw RuntimeException("设置 Session IBinder 失败: ${it.message}", it)
+            }
+
+            try {
+                session.openWrite("base.apk", 0, apkFile.length()).use { outputStream ->
+                    apkFile.inputStream().use { inputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                    session.fsync(outputStream)
+                }
+            } catch (e: Exception) {
+                throw RuntimeException("写入 APK 数据失败: ${e.message}", e)
+            }
+
+            val receiver = LocalIntentReceiver()
+            try {
+                session.commit(receiver.intentSender)
+            } catch (e: Exception) {
+                throw RuntimeException("提交安装失败: ${e.message}", e)
+            } finally {
+                try {
+                    session.close()
+                } catch (_: Exception) {}
+            }
+
+            installResultVerify(receiver)
+        }
+    }
+
+    private fun installResultVerify(receiver: LocalIntentReceiver) {
+        val intent = receiver.result
+        val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             val action = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
             throw RuntimeException("需要用户确认安装: $action")
@@ -166,48 +277,71 @@ object PackageInstallerShizuku {
                 requiredPermission: String?,
                 options: Bundle?
             ) {
-                queue.offer(intent, 5, TimeUnit.SECONDS)
+                try {
+                    queue.offer(intent, 5, TimeUnit.SECONDS)
+                } catch (_: Exception) {}
+            }
+
+            fun send(
+                code: Int,
+                intent: Intent?,
+                resolvedType: String?,
+                finishedReceiver: IIntentReceiver?,
+                requiredPermission: String?,
+                options: Bundle?
+            ) {
+                send(
+                    code, intent, resolvedType, null, finishedReceiver, requiredPermission, options
+                )
             }
 
             override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    return super.onTransact(code, data, reply, flags)
-                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) return super.onTransact(
+                    code, data, reply, flags
+                )
                 val descriptor = "android.content.IIntentSender"
-                when (code) {
+                return when (code) {
                     1 -> {
                         data.enforceInterface(descriptor)
                         send(
                             data.readInt(),
                             if (data.readInt() != 0) Intent.CREATOR.createFromParcel(data) else null,
                             data.readString(),
-                            null,
                             IIntentReceiver.Stub.asInterface(data.readStrongBinder()),
                             data.readString(),
                             if (data.readInt() != 0) Bundle.CREATOR.createFromParcel(data) else null
                         )
-                        return true
+                        true
                     }
+
                     0x5F4E5446 -> {
                         reply?.writeString(descriptor)
-                        return true
+                        true
                     }
+
                     else -> return super.onTransact(code, data, reply, flags)
                 }
             }
-
-
         }
 
-        fun getIntentSender(): IntentSender {
-            val constructor = IntentSender::class.java.getDeclaredConstructor(
-                IIntentSender::class.java
-            ).apply { isAccessible = true }
-            return constructor.newInstance(localSender) as IntentSender
+        val intentSender: IntentSender by lazy {
+            val constructor = getDeclaredConstructor(
+                IntentSender::class.java, IIntentSender::class.java
+            ) ?: throw RuntimeException("未找到 IntentSender 构造函数")
+            try {
+                constructor.newInstance(localSender) as IntentSender
+            } catch (e: Exception) {
+                throw RuntimeException("创建 IntentSender 失败: ${e.message}", e)
+            }
         }
 
-        fun getResult(): Intent {
-            return queue.take()
-        }
+        val result: Intent
+            get() = try {
+                val r = queue.take()
+                queue.remove(r)
+                r
+            } catch (e: InterruptedException) {
+                throw RuntimeException("获取安装结果超时", e)
+            }
     }
 }

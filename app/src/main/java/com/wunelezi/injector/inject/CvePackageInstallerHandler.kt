@@ -10,7 +10,8 @@ class CvePackageInstallerHandler(private val context: Context) : InjectionHandle
         DexDownloader.writeToWidgetProvider(context, dexFiles)
         val apkFile = DexDownloader.exportAndCopyApk(context)
 
-        PackageInstallerShizuku.installPackage(apkFile, context.packageName)
+        val payload = context.packageName
+        PackageInstallerShizuku.installPackage(apkFile, payload)
 
         DexDownloader.copyDexToTarget(versionSegment)
     }
